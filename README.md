@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # HTH Estate Management System
 
 A comprehensive estate management system designed specifically for hospital employees, featuring housing management, room inventory tracking, and employee assignment capabilities.
@@ -235,3 +236,6 @@ For support and questions, please contact the development team or create an issu
 ---
 
 **HTH Estate Management System** - Streamlining hospital employee housing and inventory management.
+=======
+# estate-management-system
+>>>>>>> 020c3bdeb8571cd9569f23a6ac3e02a7215f95f3
