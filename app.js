@@ -8,6 +8,7 @@ class EstateManagementApp {
         this.inventoryItems = [];
         this.employees = [];
         this.currentEditId = null;
+        this.dashboardAutoRefreshTimer = null;
         
         this.init();
     }
@@ -25,6 +26,14 @@ class EstateManagementApp {
             btn.addEventListener('click', (e) => {
                 const section = e.currentTarget.dataset.section;
                 this.showSection(section);
+            });
+        });
+
+        // Stat cards navigation
+        document.querySelectorAll('.stat-card[data-nav]').forEach(card => {
+            card.addEventListener('click', (e) => {
+                const target = e.currentTarget.getAttribute('data-nav');
+                if (target) this.showSection(target);
             });
         });
 
@@ -76,9 +85,44 @@ class EstateManagementApp {
             this.filterInventoryByRoom(e.target.value);
         });
 
+        const roomSearch = document.getElementById('room-search');
+        if (roomSearch) {
+            roomSearch.addEventListener('input', (e) => {
+                this.filterInventoryByRoomSearch(e.target.value);
+            });
+        }
+
+        const reportAllBtn = document.getElementById('inventory-report-all');
+        if (reportAllBtn) {
+            reportAllBtn.addEventListener('click', () => {
+                this.renderInventoryReport(this.inventoryItems);
+            });
+        }
+
         document.getElementById('employee-search').addEventListener('input', (e) => {
             this.filterEmployees(e.target.value);
         });
+
+        // Dashboard controls
+        const refreshBtn = document.getElementById('dashboard-refresh');
+        const autoRefreshCb = document.getElementById('dashboard-auto-refresh');
+        const typeFilter = document.getElementById('dashboard-type-filter');
+
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => this.updateDashboard());
+        }
+        if (autoRefreshCb) {
+            autoRefreshCb.addEventListener('change', (e) => {
+                if (e.target.checked) {
+                    this.startDashboardAutoRefresh();
+                } else {
+                    this.stopDashboardAutoRefresh();
+                }
+            });
+        }
+        if (typeFilter) {
+            typeFilter.addEventListener('change', () => this.updateDashboard());
+        }
     }
 
     async loadInitialData() {
@@ -99,6 +143,8 @@ class EstateManagementApp {
 
             this.populateHousingTypeFilter();
             this.populateRoomFilter();
+            // populate dashboard type filter once we have types
+            this.populateDashboardTypeFilter();
         } catch (error) {
             console.error('Error loading initial data:', error);
             this.showNotification('Error loading data', 'error');
@@ -178,7 +224,7 @@ class EstateManagementApp {
                 this.renderInventoryItems();
                 break;
             case 'employees':
-                this.renderEmployees();
+                this.renderEmployeeList();
                 break;
         }
     }
@@ -222,9 +268,13 @@ class EstateManagementApp {
     renderHousingChart() {
         const container = document.getElementById('housing-chart');
         const typeCounts = {};
+        const typeFilter = document.getElementById('dashboard-type-filter');
+        const selectedTypeId = typeFilter ? typeFilter.value : '';
         
         this.housingUnits.forEach(unit => {
-            typeCounts[unit.type_name] = (typeCounts[unit.type_name] || 0) + 1;
+            if (!selectedTypeId || unit.type_id === selectedTypeId) {
+                typeCounts[unit.type_name] = (typeCounts[unit.type_name] || 0) + 1;
+            }
         });
 
         if (Object.keys(typeCounts).length === 0) {
@@ -232,14 +282,39 @@ class EstateManagementApp {
             return;
         }
 
-        const chartData = Object.entries(typeCounts).map(([type, count]) => `
-            <div style="display: flex; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #f8f9fa;">
-                <span>${type}</span>
-                <strong>${count}</strong>
-            </div>
-        `).join('');
+        const entries = Object.entries(typeCounts);
+        const max = Math.max(...entries.map(([, c]) => c));
+        const bars = entries.map(([type, count]) => {
+            const heightPct = max === 0 ? 0 : Math.round((count / max) * 100);
+            return `<div class="bar" title="${type}: ${count}" data-count="${count}" style="height:${heightPct}%;"></div>`;
+        }).join('');
+        const labels = entries.map(([type]) => `<span title="${type}">${type.split(' ').map(w=>w[0]).join('').slice(0,4).toUpperCase()}</span>`).join('');
+        container.innerHTML = `<div class="bar-chart">${bars}</div><div class="bar-labels">${labels}</div>`;
+    }
 
-        container.innerHTML = chartData;
+    populateDashboardTypeFilter() {
+        const typeFilter = document.getElementById('dashboard-type-filter');
+        if (!typeFilter) return;
+        const options = this.housingTypes.map(t => `
+            <option value="${t.id}">${t.name}</option>
+        `).join('');
+        typeFilter.innerHTML = '<option value="">All Types</option>' + options;
+    }
+
+    startDashboardAutoRefresh() {
+        this.stopDashboardAutoRefresh();
+        this.dashboardAutoRefreshTimer = setInterval(() => {
+            if (this.currentSection === 'dashboard') {
+                this.updateDashboard();
+            }
+        }, 15000);
+    }
+
+    stopDashboardAutoRefresh() {
+        if (this.dashboardAutoRefreshTimer) {
+            clearInterval(this.dashboardAutoRefreshTimer);
+            this.dashboardAutoRefreshTimer = null;
+        }
     }
 
     renderHousingUnits() {
@@ -304,110 +379,77 @@ class EstateManagementApp {
             return;
         }
 
-        container.innerHTML = this.inventoryItems.map(item => `
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">${item.name}</h3>
-                    <div class="card-actions">
-                        <button class="btn btn-secondary" onclick="app.editInventory('${item.id}')">
-                            <i class="fas fa-edit"></i> Edit
-                        </button>
-                        <button class="btn btn-danger" onclick="app.deleteInventory('${item.id}')">
-                            <i class="fas fa-trash"></i> Delete
-                        </button>
-                    </div>
-                </div>
-                <div class="card-content">
-                    <div class="card-item">
-                        <span class="card-label">Category:</span>
-                        <span class="card-value">${item.category}</span>
-                    </div>
-                    <div class="card-item">
-                        <span class="card-label">Quantity:</span>
-                        <span class="card-value">${item.quantity}</span>
-                    </div>
-                    <div class="card-item">
-                        <span class="card-label">Condition:</span>
-                        <span class="card-value">
-                            <span class="status-badge status-${item.condition}">${item.condition}</span>
-                        </span>
-                    </div>
-                    <div class="card-item">
-                        <span class="card-label">Location:</span>
-                        <span class="card-value">${item.housing_unit_name} - Room ${item.room_number}</span>
-                    </div>
-                    ${item.description ? `
-                    <div class="card-item">
-                        <span class="card-label">Description:</span>
-                        <span class="card-value">${item.description}</span>
-                    </div>
-                    ` : ''}
-                </div>
-            </div>
-        `).join('');
+        // Default view: group by room
+        this.renderGroupedInventoryByRoom(this.rooms, this.inventoryItems);
     }
 
-    renderEmployees() {
-        const container = document.getElementById('employee-list');
-        
-        if (this.employees.length === 0) {
-            container.innerHTML = '<div class="empty-state"><i class="fas fa-users"></i><h3>No employees</h3><p>Add your first employee to get started</p></div>';
+    renderEmployeeList(filtered = null) {
+        const listEl = document.getElementById('employee-list');
+        const detailsEl = document.getElementById('employee-details');
+        const employees = filtered || this.employees;
+        if (!listEl || !detailsEl) return;
+        if (employees.length === 0) {
+            listEl.innerHTML = '<div class="empty-state" style="padding:1rem;"><i class="fas fa-users"></i><h3>No employees</h3><p>Add your first employee to get started</p></div>';
+            detailsEl.classList.add('empty');
+            detailsEl.innerHTML = '<div class="empty-state"><i class="fas fa-user"></i><h3>Select an employee</h3><p>Click an employee from the list to view details</p></div>';
             return;
         }
+        listEl.innerHTML = employees.map(e => `
+            <div class="employee-list-item" data-id="${e.id}">
+                <div>
+                    <div style="font-weight:600; color:#2c3e50;">${e.name}</div>
+                    <div style="font-size:12px; color:#7f8c8d;">${e.employee_id} • ${e.department}</div>
+                    <div style="font-size:12px; color:#516173; margin-top:2px;">${e.assigned_room_id ? `${e.housing_unit_name} - Room ${e.room_number} (${e.room_type})` : 'No room assigned'}</div>
+                </div>
+                <span class="status-badge status-${e.status}">${e.status}</span>
+            </div>
+        `).join('');
+        // click handlers
+        listEl.querySelectorAll('.employee-list-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const id = item.getAttribute('data-id');
+                listEl.querySelectorAll('.employee-list-item').forEach(i => i.classList.remove('active'));
+                item.classList.add('active');
+                const emp = this.employees.find(x => x.id === id);
+                this.renderEmployeeDetails(emp);
+            });
+        });
+        // select first by default
+        const first = employees[0];
+        const firstEl = listEl.querySelector(`.employee-list-item[data-id="${first.id}"]`);
+        if (firstEl) firstEl.classList.add('active');
+        this.renderEmployeeDetails(first);
+    }
 
-        container.innerHTML = this.employees.map(employee => `
-            <div class="card">
+    renderEmployeeDetails(employee) {
+        const el = document.getElementById('employee-details');
+        if (!el) return;
+        if (!employee) {
+            el.classList.add('empty');
+            el.innerHTML = '<div class="empty-state"><i class="fas fa-user"></i><h3>Select an employee</h3><p>Click an employee from the list to view details</p></div>';
+            return;
+        }
+        el.classList.remove('empty');
+        el.innerHTML = `
+            <div class="card" style="box-shadow:none; border:none;">
                 <div class="card-header">
                     <h3 class="card-title">${employee.name}</h3>
                     <div class="card-actions">
-                        <button class="btn btn-secondary" onclick="app.editEmployee('${employee.id}')">
-                            <i class="fas fa-edit"></i> Edit
-                        </button>
-                        <button class="btn btn-danger" onclick="app.deleteEmployee('${employee.id}')">
-                            <i class="fas fa-trash"></i> Delete
-                        </button>
+                        <button class="btn btn-secondary" onclick="app.editEmployee('${employee.id}')"><i class="fas fa-edit"></i> Edit</button>
+                        <button class="btn btn-danger" onclick="app.deleteEmployee('${employee.id}')"><i class="fas fa-trash"></i> Delete</button>
                     </div>
                 </div>
                 <div class="card-content">
-                    <div class="card-item">
-                        <span class="card-label">Employee ID:</span>
-                        <span class="card-value">${employee.employee_id}</span>
-                    </div>
-                    <div class="card-item">
-                        <span class="card-label">Department:</span>
-                        <span class="card-value">${employee.department}</span>
-                    </div>
-                    <div class="card-item">
-                        <span class="card-label">Position:</span>
-                        <span class="card-value">${employee.position}</span>
-                    </div>
-                    <div class="card-item">
-                        <span class="card-label">Status:</span>
-                        <span class="card-value">
-                            <span class="status-badge status-${employee.status}">${employee.status}</span>
-                        </span>
-                    </div>
-                    ${employee.assigned_room_id ? `
-                    <div class="card-item">
-                        <span class="card-label">Assigned Room:</span>
-                        <span class="card-value">${employee.housing_unit_name} - Room ${employee.room_number}</span>
-                    </div>
-                    ` : ''}
-                    ${employee.email ? `
-                    <div class="card-item">
-                        <span class="card-label">Email:</span>
-                        <span class="card-value">${employee.email}</span>
-                    </div>
-                    ` : ''}
-                    ${employee.phone ? `
-                    <div class="card-item">
-                        <span class="card-label">Phone:</span>
-                        <span class="card-value">${employee.phone}</span>
-                    </div>
-                    ` : ''}
+                    <div class="card-item"><span class="card-label">Employee ID:</span><span class="card-value">${employee.employee_id}</span></div>
+                    <div class="card-item"><span class="card-label">Department:</span><span class="card-value">${employee.department}</span></div>
+                    <div class="card-item"><span class="card-label">Position:</span><span class="card-value">${employee.position}</span></div>
+                    <div class="card-item"><span class="card-label">Status:</span><span class="card-value"><span class="status-badge status-${employee.status}">${employee.status}</span></span></div>
+                    <div class="card-item"><span class="card-label">Assigned Room:</span><span class="card-value">${employee.assigned_room_id ? `${employee.housing_unit_name} - Room ${employee.room_number} (${employee.room_type})` : 'No room assigned'}</span></div>
+                    ${employee.email ? `<div class="card-item"><span class="card-label">Email:</span><span class="card-value">${employee.email}</span></div>` : ''}
+                    ${employee.phone ? `<div class="card-item"><span class="card-label">Phone:</span><span class="card-value">${employee.phone}</span></div>` : ''}
                 </div>
             </div>
-        `).join('');
+        `;
     }
 
     showModal(title, content) {
@@ -653,7 +695,7 @@ class EstateManagementApp {
         }
     }
 
-    async saveInventory(id) {
+    async saveInventory(id, keepOpen = false) {
         const data = {
             name: document.getElementById('item-name').value,
             room_id: document.getElementById('item-room').value,
@@ -674,10 +716,35 @@ class EstateManagementApp {
                 this.showNotification('Inventory item added successfully', 'success');
             }
             
-            this.closeModal();
             await this.loadInitialData();
             this.renderInventoryItems();
             this.updateDashboard();
+
+            if (!keepOpen) {
+                this.closeModal();
+            } else {
+                // Reopen add flow for the same room
+                const roomId = data.room_id;
+                this.addInventoryForRoom(roomId);
+                // Clear fields for next entry
+                setTimeout(() => {
+                    const nameEl = document.getElementById('item-name');
+                    const qtyEl = document.getElementById('item-quantity');
+                    const catEl = document.getElementById('item-category');
+                    const condEl = document.getElementById('item-condition');
+                    const descEl = document.getElementById('item-description');
+                    const pdEl = document.getElementById('item-purchase-date');
+                    const weEl = document.getElementById('item-warranty');
+                    if (nameEl) nameEl.value = '';
+                    if (qtyEl) qtyEl.value = 1;
+                    if (catEl) catEl.value = '';
+                    if (condEl) condEl.value = 'good';
+                    if (descEl) descEl.value = '';
+                    if (pdEl) pdEl.value = '';
+                    if (weEl) weEl.value = '';
+                    if (nameEl) nameEl.focus();
+                }, 0);
+            }
         } catch (error) {
             console.error('Error saving inventory item:', error);
             this.showNotification('Error saving inventory item', 'error');
@@ -796,7 +863,7 @@ class EstateManagementApp {
                     <td>${room.capacity}</td>
                     <td><span class="status-badge status-${room.status}">${room.status}</span></td>
                     <td>
-                        <button class="btn btn-success" onclick="app.addInventoryForRoom('${room.id}')"><i class="fas fa-plus"></i> Item</button>
+                        <button class="btn btn-soft-success btn-sm btn-pill" onclick="app.addInventoryForRoom('${room.id}')"><i class="fas fa-plus"></i><span>Add item</span></button>
                         <button class="btn btn-secondary" onclick="app.showRoomForm('${housingUnitId}', '${room.id}')"><i class="fas fa-edit"></i></button>
                         <button class="btn btn-danger" onclick="app.deleteRoom('${room.id}', '${housingUnitId}')"><i class="fas fa-trash"></i></button>
                     </td>
@@ -939,10 +1006,24 @@ class EstateManagementApp {
             roomSelect.value = roomId;
             roomSelect.disabled = true;
         }
-        // When saving, re-enable to avoid leaving disabled state for next open
+        // Add a 'Save & Add Another' button (only for add flow)
+        const footer = document.querySelector('.modal-footer');
+        if (footer && !document.getElementById('modal-save-another')) {
+            const addAnother = document.createElement('button');
+            addAnother.id = 'modal-save-another';
+            addAnother.className = 'btn btn-outline-primary btn-sm btn-pill';
+            addAnother.innerHTML = '<i class="fas fa-plus"></i><span>Save & Add Another</span>';
+            addAnother.onclick = () => this.saveInventory(null, true);
+            footer.insertBefore(addAnother, document.getElementById('modal-save'));
+        }
+        // Cleanup when truly saving and closing
         const modalSave = document.getElementById('modal-save');
         const cleanup = () => {
             if (roomSelect) roomSelect.disabled = false;
+            const addAnotherBtn = document.getElementById('modal-save-another');
+            if (addAnotherBtn && addAnotherBtn.parentNode) {
+                addAnotherBtn.parentNode.removeChild(addAnotherBtn);
+            }
             modalSave && modalSave.removeEventListener('click', cleanup);
         };
         if (modalSave) {
@@ -1042,22 +1123,33 @@ class EstateManagementApp {
     }
 
     filterInventory(searchTerm) {
+        const term = (searchTerm || '').trim().toLowerCase();
+        if (!term) {
+            // empty search -> grouped view
+            this.renderGroupedInventoryByRoom(this.rooms, this.inventoryItems);
+            return;
+        }
         const filtered = this.inventoryItems.filter(item => 
-            item.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            item.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            item.housing_unit_name.toLowerCase().includes(searchTerm.toLowerCase())
+            item.name.toLowerCase().includes(term) ||
+            item.category.toLowerCase().includes(term) ||
+            item.housing_unit_name.toLowerCase().includes(term) ||
+            (item.room_number + '').toLowerCase().includes(term) ||
+            (item.room_type + '').toLowerCase().includes(term) ||
+            (item.description || '').toLowerCase().includes(term)
         );
-        this.renderFilteredInventory(filtered);
+        this.renderInventoryReport(filtered);
     }
 
     filterInventoryByRoom(roomId) {
         if (!roomId) {
-            this.renderInventoryItems();
+            // reset to full grouped view
+            this.renderGroupedInventoryByRoom(this.rooms, this.inventoryItems);
             return;
         }
         
-        const filtered = this.inventoryItems.filter(item => item.room_id === roomId);
-        this.renderFilteredInventory(filtered);
+        const rooms = this.rooms.filter(r => r.id === roomId);
+        const items = this.inventoryItems.filter(item => item.room_id === roomId);
+        this.renderGroupedInventoryByRoom(rooms, items);
     }
 
     renderFilteredInventory(items) {
@@ -1111,6 +1203,161 @@ class EstateManagementApp {
         `).join('');
     }
 
+    renderInventoryReport(items) {
+        const container = document.getElementById('inventory-list');
+        if (!items || items.length === 0) {
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-search"></i><h3>No inventory items found</h3><p>Try another search term</p></div>';
+            return;
+        }
+        const rows = items.map(item => `
+            <tr>
+                <td>${item.name}</td>
+                <td>${item.category}</td>
+                <td>${item.quantity}</td>
+                <td><span class="status-badge status-${item.condition}">${item.condition}</span></td>
+                <td>${item.housing_unit_name}</td>
+                <td>${item.room_number}</td>
+                <td>${item.room_type}</td>
+                <td>${item.purchase_date || ''}</td>
+                <td>${item.warranty_expiry || ''}</td>
+                <td>${item.description || ''}</td>
+                <td style="white-space:nowrap">
+                    <button class="btn btn-secondary btn-sm" onclick="app.editInventory('${item.id}')"><i class="fas fa-edit"></i><span>Edit</span></button>
+                    <button class="btn btn-danger btn-sm" onclick="app.deleteInventory('${item.id}')"><i class="fas fa-trash"></i><span>Delete</span></button>
+                </td>
+            </tr>
+        `).join('');
+        const totalQty = items.reduce((sum, i) => sum + (parseInt(i.quantity) || 0), 0);
+        container.innerHTML = `
+            <div class="report-header">
+                <div class="report-summary">Items: <strong>${items.length}</strong> • Total Qty: <strong>${totalQty}</strong></div>
+                <div class="report-actions">
+                    <button class="btn btn-outline-secondary btn-sm" id="report-export-csv"><i class="fas fa-download"></i><span>CSV</span></button>
+                    <button class="btn btn-outline-secondary btn-sm" id="report-print"><i class="fas fa-print"></i><span>Print</span></button>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table class="table" id="inventory-report-table">
+                    <thead>
+                        <tr>
+                            <th class="sortable" data-key="name">Item</th>
+                            <th class="sortable" data-key="category">Category</th>
+                            <th class="sortable" data-key="quantity">Qty</th>
+                            <th class="sortable" data-key="condition">Condition</th>
+                            <th class="sortable" data-key="housing_unit_name">Unit</th>
+                            <th class="sortable" data-key="room_number">Room #</th>
+                            <th class="sortable" data-key="room_type">Room Type</th>
+                            <th class="sortable" data-key="purchase_date">Purchase Date</th>
+                            <th class="sortable" data-key="warranty_expiry">Warranty Expiry</th>
+                            <th>Description</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                    </tbody>
+                </table>
+            </div>`;
+        // Wire actions
+        const exportBtn = document.getElementById('report-export-csv');
+        if (exportBtn) exportBtn.onclick = () => this.exportInventoryCsv(items);
+        const printBtn = document.getElementById('report-print');
+        if (printBtn) printBtn.onclick = () => window.print();
+        const table = document.getElementById('inventory-report-table');
+        if (table) {
+            table.querySelectorAll('th.sortable').forEach(th => {
+                th.addEventListener('click', () => {
+                    const key = th.getAttribute('data-key');
+                    const sorted = [...items].sort((a,b) => {
+                        const av = (a[key] || '').toString().toLowerCase();
+                        const bv = (b[key] || '').toString().toLowerCase();
+                        if (key === 'quantity' || key === 'room_number') {
+                            return (parseInt(a[key])||0) - (parseInt(b[key])||0);
+                        }
+                        return av.localeCompare(bv);
+                    });
+                    this.renderInventoryReport(sorted);
+                });
+            });
+        }
+    }
+
+    exportInventoryCsv(items) {
+        const headers = ['Item','Category','Qty','Condition','Unit','Room #','Room Type','Purchase Date','Warranty Expiry','Description'];
+        const rows = items.map(i => [
+            i.name, i.category, i.quantity, i.condition, i.housing_unit_name, i.room_number, i.room_type, i.purchase_date||'', i.warranty_expiry||'', (i.description||'').replace(/\n/g,' ')
+        ]);
+        const csv = [headers, ...rows].map(r => r.map(v => `"${(v!=null?v:'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'inventory-report.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    filterInventoryByRoomSearch(searchTerm) {
+        const lower = searchTerm.trim().toLowerCase();
+        if (!lower) {
+            this.renderGroupedInventoryByRoom(this.rooms, this.inventoryItems);
+            return;
+        }
+        const matchingRooms = this.rooms.filter(r =>
+            r.room_number.toLowerCase().includes(lower) ||
+            r.room_type.toLowerCase().includes(lower) ||
+            (r.housing_unit_name || '').toLowerCase().includes(lower)
+        );
+        const roomIds = new Set(matchingRooms.map(r => r.id));
+        const items = this.inventoryItems.filter(i => roomIds.has(i.room_id));
+        this.renderGroupedInventoryByRoom(matchingRooms, items);
+    }
+
+    renderGroupedInventoryByRoom(rooms, items) {
+        const container = document.getElementById('inventory-list');
+        if (!rooms || rooms.length === 0) {
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-search"></i><h3>No rooms found</h3><p>Try adjusting your search</p></div>';
+            return;
+        }
+        // Build map roomId -> items
+        const byRoom = rooms.map(room => {
+            const roomItems = items.filter(i => i.room_id === room.id);
+            const itemsHtml = roomItems.length === 0
+                ? `<div class="room-group-empty">No inventory items</div>`
+                : roomItems.map(item => `
+                    <div class="card" style="margin-bottom: 0.75rem;">
+                        <div class="card-header">
+                            <h3 class="card-title">${item.name}</h3>
+                            <div class="card-actions">
+                                <button class="btn btn-secondary" onclick="app.editInventory('${item.id}')"><i class="fas fa-edit"></i> Edit</button>
+                                <button class="btn btn-danger" onclick="app.deleteInventory('${item.id}')"><i class="fas fa-trash"></i> Delete</button>
+                            </div>
+                        </div>
+                        <div class="card-content">
+                            <div class="card-item"><span class="card-label">Category:</span><span class="card-value">${item.category}</span></div>
+                            <div class="card-item"><span class="card-label">Quantity:</span><span class="card-value">${item.quantity}</span></div>
+                            <div class="card-item"><span class="card-label">Condition:</span><span class="card-value"><span class="status-badge status-${item.condition}">${item.condition}</span></span></div>
+                            ${item.description ? `<div class="card-item"><span class="card-label">Description:</span><span class="card-value">${item.description}</span></div>` : ''}
+                        </div>
+                    </div>
+                `).join('');
+            return `
+                <div class="room-group">
+                    <div class="room-group-header">
+                        <h4>${room.housing_unit_name} - Room ${room.room_number} (${room.room_type})</h4>
+                        <div>
+                            <button class="btn btn-soft-success btn-sm btn-pill" onclick="app.addInventoryForRoom('${room.id}')"><i class="fas fa-plus"></i><span>Add item</span></button>
+                        </div>
+                    </div>
+                    <div class="room-group-body">${itemsHtml}</div>
+                </div>
+            `;
+        }).join('');
+        container.innerHTML = byRoom;
+    }
+
     filterEmployees(searchTerm) {
         const filtered = this.employees.filter(employee => 
             employee.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -1118,71 +1365,10 @@ class EstateManagementApp {
             employee.department.toLowerCase().includes(searchTerm.toLowerCase()) ||
             employee.position.toLowerCase().includes(searchTerm.toLowerCase())
         );
-        this.renderFilteredEmployees(filtered);
+        this.renderEmployeeList(filtered);
     }
 
-    renderFilteredEmployees(employees) {
-        const container = document.getElementById('employee-list');
-        
-        if (employees.length === 0) {
-            container.innerHTML = '<div class="empty-state"><i class="fas fa-search"></i><h3>No employees found</h3><p>Try adjusting your search criteria</p></div>';
-            return;
-        }
-
-        container.innerHTML = employees.map(employee => `
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">${employee.name}</h3>
-                    <div class="card-actions">
-                        <button class="btn btn-secondary" onclick="app.editEmployee('${employee.id}')">
-                            <i class="fas fa-edit"></i> Edit
-                        </button>
-                        <button class="btn btn-danger" onclick="app.deleteEmployee('${employee.id}')">
-                            <i class="fas fa-trash"></i> Delete
-                        </button>
-                    </div>
-                </div>
-                <div class="card-content">
-                    <div class="card-item">
-                        <span class="card-label">Employee ID:</span>
-                        <span class="card-value">${employee.employee_id}</span>
-                    </div>
-                    <div class="card-item">
-                        <span class="card-label">Department:</span>
-                        <span class="card-value">${employee.department}</span>
-                    </div>
-                    <div class="card-item">
-                        <span class="card-label">Position:</span>
-                        <span class="card-value">${employee.position}</span>
-                    </div>
-                    <div class="card-item">
-                        <span class="card-label">Status:</span>
-                        <span class="card-value">
-                            <span class="status-badge status-${employee.status}">${employee.status}</span>
-                        </span>
-                    </div>
-                    ${employee.assigned_room_id ? `
-                    <div class="card-item">
-                        <span class="card-label">Assigned Room:</span>
-                        <span class="card-value">${employee.housing_unit_name} - Room ${employee.room_number}</span>
-                    </div>
-                    ` : ''}
-                    ${employee.email ? `
-                    <div class="card-item">
-                        <span class="card-label">Email:</span>
-                        <span class="card-value">${employee.email}</span>
-                    </div>
-                    ` : ''}
-                    ${employee.phone ? `
-                    <div class="card-item">
-                        <span class="card-label">Phone:</span>
-                        <span class="card-value">${employee.phone}</span>
-                    </div>
-                    ` : ''}
-                </div>
-            </div>
-        `).join('');
-    }
+    renderFilteredEmployees(_) { /* no-op in master-detail; kept for compatibility */ }
 
     showNotification(message, type = 'info') {
         // Create notification element

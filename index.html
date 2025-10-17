@@ -4,14 +4,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HTH Estate Management System</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=2">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 </head>
 <body>
     <div id="app">
         <header class="header">
             <div class="header-content">
-                <h1><i class="fas fa-building"></i> HTH Estate Management</h1>
+                <h1><img src="Asset/HTH logo.jpeg" alt="HTH" class="header-logo"> HTH Estate Management</h1>
                 <nav class="nav">
                     <button class="nav-btn active" data-section="dashboard">
                         <i class="fas fa-tachometer-alt"></i> Dashboard
@@ -34,11 +34,19 @@
             <section id="dashboard" class="section active">
                 <div class="section-header">
                     <h2>Dashboard</h2>
-                    <p>Overview of estate management system</p>
+                    <div class="dashboard-controls">
+                        <select id="dashboard-type-filter">
+                            <option value="">All Types</option>
+                        </select>
+                        <label class="auto-refresh-toggle">
+                            <input type="checkbox" id="dashboard-auto-refresh">
+                            <span>Auto-refresh</span>
+                        </label>
+                    </div>
                 </div>
                 
                 <div class="stats-grid">
-                    <div class="stat-card">
+                    <div class="stat-card" data-nav="housing">
                         <div class="stat-icon">
                             <i class="fas fa-home"></i>
                         </div>
@@ -48,7 +56,7 @@
                         </div>
                     </div>
                     
-                    <div class="stat-card">
+                    <div class="stat-card" data-nav="housing">
                         <div class="stat-icon">
                             <i class="fas fa-bed"></i>
                         </div>
@@ -58,7 +66,7 @@
                         </div>
                     </div>
                     
-                    <div class="stat-card">
+                    <div class="stat-card" data-nav="inventory">
                         <div class="stat-icon">
                             <i class="fas fa-boxes"></i>
                         </div>
@@ -68,7 +76,7 @@
                         </div>
                     </div>
                     
-                    <div class="stat-card">
+                    <div class="stat-card" data-nav="employees">
                         <div class="stat-icon">
                             <i class="fas fa-users"></i>
                         </div>
@@ -124,7 +132,9 @@
                     <select id="room-filter">
                         <option value="">All Rooms</option>
                     </select>
+                    <input type="text" id="room-search" placeholder="Search rooms...">
                     <input type="text" id="inventory-search" placeholder="Search inventory...">
+                    <button class="btn btn-outline-secondary" id="inventory-report-all"><i class="fas fa-file-alt"></i><span>All Inventory Report</span></button>
                 </div>
                 
                 <div id="inventory-list" class="inventory-grid"></div>
@@ -142,8 +152,13 @@
                 <div class="filters">
                     <input type="text" id="employee-search" placeholder="Search employees...">
                 </div>
-                
-                <div id="employee-list" class="employee-grid"></div>
+
+                <div class="employee-layout">
+                    <div id="employee-list" class="employee-list"></div>
+                    <div id="employee-details" class="employee-details empty">
+                        <div class="empty-state"><i class="fas fa-user"></i><h3>Select an employee</h3><p>Click an employee from the list to view details</p></div>
+                    </div>
+                </div>
             </section>
         </main>
     </div>
