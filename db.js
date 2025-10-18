@@ -1,40 +1,30 @@
-const sql = require('mssql');
+const mysql = require('mysql2/promise');
 
-// Environment-driven config with sensible defaults for SQL Server/Express
-// Note: (localdb) is not supported by 'tedious'. Use localhost or .\\SQLEXPRESS via SQL_SERVER/SQL_INSTANCE.
+// Environment-driven config for MySQL
 const config = {
-	server: process.env.SQL_SERVER || 'localhost',
-	database: process.env.SQL_DATABASE || 'HTHEstate',
-	user: process.env.SQL_USER || undefined,
-	password: process.env.SQL_PASSWORD || undefined,
-	port: process.env.SQL_PORT ? parseInt(process.env.SQL_PORT, 10) : undefined,
-	options: {
-		instanceName: process.env.SQL_INSTANCE || undefined, // e.g. 'SQLEXPRESS'
-		trustServerCertificate: true,
-		enableArithAbort: true
-	}
+	host: process.env.MYSQL_HOST || 'localhost',
+	user: process.env.MYSQL_USER || 'root',
+	password: process.env.MYSQL_PASSWORD || 'HTH_Server1',
+	database: process.env.MYSQL_DB || 'hospital_estate',
+	port: process.env.MYSQL_PORT ? parseInt(process.env.MYSQL_PORT, 10) : 3306,
+
+	waitForConnections: true,
+	connectionLimit: 10,
+	queueLimit: 0
 };
 
-let poolPromise;
+let pool;
 
 async function getPool() {
-	if (!poolPromise) {
-		poolPromise = new sql.ConnectionPool(config)
-			.connect()
-			.then(pool => {
-				console.log('Connected to SQL Server', { server: config.server, instance: config.options.instanceName, database: config.database });
-				return pool;
-			})
-			.catch(err => {
-				console.error('SQL Server connection error:', err);
-				console.error('Tried config:', { server: config.server, instance: config.options.instanceName, database: config.database, port: config.port });
-				poolPromise = undefined;
-				throw err;
-			});
+	if (!pool) {
+		pool = mysql.createPool(config);
+		// simple test connection
+		await pool.query('SELECT 1');
+		console.log('Connected to MySQL', { host: config.host, database: config.database });
 	}
-	return poolPromise;
+	return pool;
 }
 
-module.exports = { sql, getPool };
+module.exports = { getPool };
 
 

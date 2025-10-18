@@ -1,8 +1,10 @@
 const express = require('express');
 const cors = require('cors');
+const session = require('express-session');
+const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
-const { sql, getPool } = require('./db');
+const { getPool } = require('./db');
 
 // Helpers
 function toNullableString(value) {
@@ -26,129 +28,235 @@ function friendlySqlError(err) {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Session configuration
+app.use(session({
+    secret: process.env.SESSION_SECRET || 'hth-estate-secret-key-2024',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        secure: false, // Set to true if using HTTPS
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    }
+}));
+
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: true,
+    credentials: true
+}));
 app.use(express.json());
 app.use(express.static('.'));
 
-// Database schema initialization (SQL Server)
+// Database schema initialization (MySQL)
 async function initSchema() {
     const pool = await getPool();
-    // Create tables if they do not exist
-    const schemaSql = `
-IF OBJECT_ID('dbo.housing_types','U') IS NULL
-BEGIN
-    CREATE TABLE dbo.housing_types (
-        id NVARCHAR(50) NOT NULL PRIMARY KEY,
-        name NVARCHAR(255) NOT NULL UNIQUE,
-        description NVARCHAR(MAX) NULL,
-        created_at DATETIME2 DEFAULT SYSUTCDATETIME()
-    );
-END;
+    // MySQL DDL (InnoDB, utf8mb4). Uses VARCHAR and DATETIME.
+    const ddlStatements = [
+        `CREATE TABLE IF NOT EXISTS housing_types (
+            id VARCHAR(50) NOT NULL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL UNIQUE,
+            description TEXT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
+        `CREATE TABLE IF NOT EXISTS housing_units (
+            id VARCHAR(50) NOT NULL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            type_id VARCHAR(50) NOT NULL,
+            address VARCHAR(500) NOT NULL,
+            capacity INT DEFAULT 1,
+            status VARCHAR(50) DEFAULT 'available',
+            description TEXT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            CONSTRAINT FK_housing_units_type FOREIGN KEY (type_id) REFERENCES housing_types (id) ON DELETE RESTRICT ON UPDATE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
+        `CREATE TABLE IF NOT EXISTS rooms (
+            id VARCHAR(50) NOT NULL PRIMARY KEY,
+            housing_unit_id VARCHAR(50) NOT NULL,
+            room_number VARCHAR(50) NOT NULL,
+            room_type VARCHAR(50) NOT NULL,
+            capacity INT DEFAULT 1,
+            status VARCHAR(50) DEFAULT 'available',
+            description TEXT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            CONSTRAINT FK_rooms_unit FOREIGN KEY (housing_unit_id) REFERENCES housing_units (id) ON DELETE CASCADE ON UPDATE CASCADE,
+            INDEX idx_rooms_housing_unit_id (housing_unit_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
+        `CREATE TABLE IF NOT EXISTS inventory_items (
+            id VARCHAR(50) NOT NULL PRIMARY KEY,
+            room_id VARCHAR(50) NOT NULL,
+            name VARCHAR(255) NOT NULL,
+            category VARCHAR(100) NOT NULL,
+            quantity INT DEFAULT 1,
+            ` + "`condition`" + ` VARCHAR(50) DEFAULT 'good',
+            description TEXT NULL,
+            purchase_date DATE NULL,
+            warranty_expiry DATE NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            CONSTRAINT FK_inventory_room FOREIGN KEY (room_id) REFERENCES rooms (id) ON DELETE CASCADE ON UPDATE CASCADE,
+            INDEX idx_inventory_room_id (room_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
+        `CREATE TABLE IF NOT EXISTS employees (
+            id VARCHAR(50) NOT NULL PRIMARY KEY,
+            employee_id VARCHAR(100) NOT NULL UNIQUE,
+            name VARCHAR(255) NOT NULL,
+            department VARCHAR(255) NOT NULL,
+            position VARCHAR(255) NOT NULL,
+            email VARCHAR(255) NULL,
+            phone VARCHAR(50) NULL,
+            assigned_room_id VARCHAR(50) NULL,
+            status VARCHAR(50) DEFAULT 'active',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            CONSTRAINT FK_employees_room FOREIGN KEY (assigned_room_id) REFERENCES rooms (id) ON DELETE SET NULL ON UPDATE CASCADE,
+            INDEX idx_employees_assigned_room_id (assigned_room_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
+        `CREATE TABLE IF NOT EXISTS users (
+            id VARCHAR(50) NOT NULL PRIMARY KEY,
+            username VARCHAR(100) NOT NULL UNIQUE,
+            password_hash VARCHAR(255) NOT NULL,
+            role ENUM('admin', 'super_admin') NOT NULL DEFAULT 'admin',
+            full_name VARCHAR(255) NOT NULL,
+            email VARCHAR(255) NULL,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            INDEX idx_users_username (username),
+            INDEX idx_users_role (role)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
+    ];
+    for (const stmt of ddlStatements) {
+        await pool.query(stmt);
+    }
+    // Seed default housing types
+    await pool.query("INSERT IGNORE INTO housing_types (id, name, description) VALUES ('hth-bangalore','HTH Bangalore','Hospital staff housing in Bangalore')");
+    await pool.query("INSERT IGNORE INTO housing_types (id, name, description) VALUES ('rental-apartment','Rental Apartment','Rental apartments for hospital employees')");
+    await pool.query("INSERT IGNORE INTO housing_types (id, name, description) VALUES ('housement-flat','Housement Flat','Housement flats for hospital staff')");
+    
+    // Seed default admin users
+    const defaultPassword = 'admin123';
+    const hashedPassword = await bcrypt.hash(defaultPassword, 10);
+    
+    await pool.query(`INSERT IGNORE INTO users (id, username, password_hash, role, full_name, email) 
+                      VALUES ('admin-user-id', 'admin', ?, 'admin', 'System Admin', 'admin@hth.com')`, [hashedPassword]);
+    
+    await pool.query(`INSERT IGNORE INTO users (id, username, password_hash, role, full_name, email) 
+                      VALUES ('super-admin-user-id', 'superadmin', ?, 'super_admin', 'Super Admin', 'superadmin@hth.com')`, [hashedPassword]);
+}
 
-IF OBJECT_ID('dbo.housing_units','U') IS NULL
-BEGIN
-    CREATE TABLE dbo.housing_units (
-        id NVARCHAR(50) NOT NULL PRIMARY KEY,
-        name NVARCHAR(255) NOT NULL,
-        type_id NVARCHAR(50) NOT NULL,
-        address NVARCHAR(500) NOT NULL,
-        capacity INT DEFAULT 1,
-        status NVARCHAR(50) DEFAULT 'available',
-        description NVARCHAR(MAX) NULL,
-        created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
-        updated_at DATETIME2 DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_housing_units_type FOREIGN KEY (type_id) REFERENCES dbo.housing_types (id)
-    );
-END;
+// Authentication middleware
+function requireAuth(req, res, next) {
+    if (!req.session.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    next();
+}
 
-IF OBJECT_ID('dbo.rooms','U') IS NULL
-BEGIN
-    CREATE TABLE dbo.rooms (
-        id NVARCHAR(50) NOT NULL PRIMARY KEY,
-        housing_unit_id NVARCHAR(50) NOT NULL,
-        room_number NVARCHAR(50) NOT NULL,
-        room_type NVARCHAR(50) NOT NULL,
-        capacity INT DEFAULT 1,
-        status NVARCHAR(50) DEFAULT 'available',
-        description NVARCHAR(MAX) NULL,
-        created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
-        updated_at DATETIME2 DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_rooms_unit FOREIGN KEY (housing_unit_id) REFERENCES dbo.housing_units (id)
-    );
-END;
+function requireSuperAdmin(req, res, next) {
+    if (!req.session.user || req.session.user.role !== 'super_admin') {
+        return res.status(403).json({ error: 'Super Admin access required' });
+    }
+    next();
+}
 
-IF OBJECT_ID('dbo.inventory_items','U') IS NULL
-BEGIN
-    CREATE TABLE dbo.inventory_items (
-        id NVARCHAR(50) NOT NULL PRIMARY KEY,
-        room_id NVARCHAR(50) NOT NULL,
-        name NVARCHAR(255) NOT NULL,
-        category NVARCHAR(100) NOT NULL,
-        quantity INT DEFAULT 1,
-        condition NVARCHAR(50) DEFAULT 'good',
-        description NVARCHAR(MAX) NULL,
-        purchase_date DATE NULL,
-        warranty_expiry DATE NULL,
-        created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
-        updated_at DATETIME2 DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_inventory_room FOREIGN KEY (room_id) REFERENCES dbo.rooms (id)
-    );
-END;
-
-IF OBJECT_ID('dbo.employees','U') IS NULL
-BEGIN
-    CREATE TABLE dbo.employees (
-        id NVARCHAR(50) NOT NULL PRIMARY KEY,
-        employee_id NVARCHAR(100) NOT NULL UNIQUE,
-        name NVARCHAR(255) NOT NULL,
-        department NVARCHAR(255) NOT NULL,
-        position NVARCHAR(255) NOT NULL,
-        email NVARCHAR(255) NULL,
-        phone NVARCHAR(50) NULL,
-        assigned_room_id NVARCHAR(50) NULL,
-        status NVARCHAR(50) DEFAULT 'active',
-        created_at DATETIME2 DEFAULT SYSUTCDATETIME(),
-        updated_at DATETIME2 DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_employees_room FOREIGN KEY (assigned_room_id) REFERENCES dbo.rooms (id)
-    );
-END;
-
--- Default housing types
-IF NOT EXISTS (SELECT 1 FROM dbo.housing_types WHERE id = 'hth-bangalore')
-    INSERT INTO dbo.housing_types (id, name, description) VALUES ('hth-bangalore','HTH Bangalore','Hospital staff housing in Bangalore');
-IF NOT EXISTS (SELECT 1 FROM dbo.housing_types WHERE id = 'rental-apartment')
-    INSERT INTO dbo.housing_types (id, name, description) VALUES ('rental-apartment','Rental Apartment','Rental apartments for hospital employees');
-IF NOT EXISTS (SELECT 1 FROM dbo.housing_types WHERE id = 'housement-flat')
-    INSERT INTO dbo.housing_types (id, name, description) VALUES ('housement-flat','Housement Flat','Housement flats for hospital staff');
-`;
-    await pool.request().batch(schemaSql);
+function requireAdminOrSuperAdmin(req, res, next) {
+    if (!req.session.user || (req.session.user.role !== 'admin' && req.session.user.role !== 'super_admin')) {
+        return res.status(403).json({ error: 'Admin or Super Admin access required' });
+    }
+    next();
 }
 
 // API Routes
 
-// Housing Types
-app.get('/api/housing-types', async (req, res) => {
+// Authentication Routes
+app.post('/api/login', async (req, res) => {
+    const { username, password } = req.body;
+    
+    if (!username || !password) {
+        return res.status(400).json({ error: 'Username and password are required' });
+    }
+    
     try {
         const pool = await getPool();
-        const result = await pool.request().query('SELECT * FROM dbo.housing_types ORDER BY name');
-        res.json(result.recordset);
+        const [rows] = await pool.query(
+            'SELECT id, username, password_hash, role, full_name, email FROM users WHERE username = ? AND is_active = TRUE',
+            [username]
+        );
+        
+        if (rows.length === 0) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+        
+        const user = rows[0];
+        const isValidPassword = await bcrypt.compare(password, user.password_hash);
+        
+        if (!isValidPassword) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+        
+        // Store user in session
+        req.session.user = {
+            id: user.id,
+            username: user.username,
+            role: user.role,
+            full_name: user.full_name,
+            email: user.email
+        };
+        
+        res.json({
+            message: 'Login successful',
+            user: {
+                id: user.id,
+                username: user.username,
+                role: user.role,
+                full_name: user.full_name,
+                email: user.email
+            }
+        });
+    } catch (err) {
+        console.error('Login failed:', err);
+        res.status(500).json({ error: 'Login failed' });
+    }
+});
+
+app.post('/api/logout', (req, res) => {
+    req.session.destroy((err) => {
+        if (err) {
+            return res.status(500).json({ error: 'Logout failed' });
+        }
+        res.json({ message: 'Logout successful' });
+    });
+});
+
+app.get('/api/auth/me', (req, res) => {
+    if (!req.session.user) {
+        return res.status(401).json({ error: 'Not authenticated' });
+    }
+    
+    res.json({ user: req.session.user });
+});
+
+// Housing Types
+app.get('/api/housing-types', requireAuth, async (req, res) => {
+    try {
+        const pool = await getPool();
+        const [rows] = await pool.query('SELECT * FROM housing_types ORDER BY name');
+        res.json(rows);
     } catch (err) {
             res.status(500).json({ error: err.message });
         }
 });
 
-app.post('/api/housing-types', async (req, res) => {
+app.post('/api/housing-types', requireSuperAdmin, async (req, res) => {
     const name = toNullableString(req.body.name);
     const description = toNullableString(req.body.description);
     const id = uuidv4();
     try {
         const pool = await getPool();
-        await pool.request()
-            .input('id', sql.NVarChar(50), id)
-            .input('name', sql.NVarChar(255), name)
-            .input('description', sql.NVarChar(sql.MAX), description)
-            .query('INSERT INTO dbo.housing_types (id, name, description) VALUES (@id, @name, @description)');
+        await pool.query('INSERT INTO housing_types (id, name, description) VALUES (?, ?, ?)', [id, name, description]);
         res.json({ id, name, description });
     } catch (err) {
         console.error('Create housing-type failed:', err, req.body);
@@ -157,22 +265,22 @@ app.post('/api/housing-types', async (req, res) => {
 });
 
 // Housing Units
-app.get('/api/housing-units', async (req, res) => {
+app.get('/api/housing-units', requireAuth, async (req, res) => {
     const query = `
         SELECT hu.*, ht.name as type_name 
-        FROM dbo.housing_units hu 
-        JOIN dbo.housing_types ht ON hu.type_id = ht.id 
+        FROM housing_units hu 
+        JOIN housing_types ht ON hu.type_id = ht.id 
         ORDER BY hu.name`;
     try {
         const pool = await getPool();
-        const result = await pool.request().query(query);
-        res.json(result.recordset);
+        const [rows] = await pool.query(query);
+        res.json(rows);
     } catch (err) {
             res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/api/housing-units', async (req, res) => {
+app.post('/api/housing-units', requireSuperAdmin, async (req, res) => {
     const name = toNullableString(req.body.name);
     const type_id = toNullableString(req.body.type_id);
     const address = toNullableString(req.body.address);
@@ -182,16 +290,8 @@ app.post('/api/housing-units', async (req, res) => {
     const id = uuidv4();
     try {
         const pool = await getPool();
-        await pool.request()
-            .input('id', sql.NVarChar(50), id)
-            .input('name', sql.NVarChar(255), name)
-            .input('type_id', sql.NVarChar(50), type_id)
-            .input('address', sql.NVarChar(500), address)
-            .input('capacity', sql.Int, capacity)
-            .input('status', sql.NVarChar(50), status)
-            .input('description', sql.NVarChar(sql.MAX), description)
-            .query(`INSERT INTO dbo.housing_units (id, name, type_id, address, capacity, status, description) 
-                    VALUES (@id, @name, @type_id, @address, @capacity, @status, @description)`);
+        await pool.query(`INSERT INTO housing_units (id, name, type_id, address, capacity, status, description) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?)`, [id, name, type_id, address, capacity, status, description]);
         res.json({ id, name, type_id, address, capacity, status, description });
     } catch (err) {
         console.error('Create housing-unit failed:', err, req.body);
@@ -199,7 +299,7 @@ app.post('/api/housing-units', async (req, res) => {
     }
 });
 
-app.put('/api/housing-units/:id', async (req, res) => {
+app.put('/api/housing-units/:id', requireSuperAdmin, async (req, res) => {
     const name = toNullableString(req.body.name);
     const type_id = toNullableString(req.body.type_id);
     const address = toNullableString(req.body.address);
@@ -209,17 +309,9 @@ app.put('/api/housing-units/:id', async (req, res) => {
     const id = req.params.id;
     try {
         const pool = await getPool();
-        await pool.request()
-            .input('id', sql.NVarChar(50), id)
-            .input('name', sql.NVarChar(255), name)
-            .input('type_id', sql.NVarChar(50), type_id)
-            .input('address', sql.NVarChar(500), address)
-            .input('capacity', sql.Int, capacity)
-            .input('status', sql.NVarChar(50), status)
-            .input('description', sql.NVarChar(sql.MAX), description)
-            .query(`UPDATE dbo.housing_units 
-                    SET name=@name, type_id=@type_id, address=@address, capacity=@capacity, status=@status, description=@description, updated_at=SYSUTCDATETIME()
-                    WHERE id=@id`);
+        await pool.query(`UPDATE housing_units 
+                    SET name=?, type_id=?, address=?, capacity=?, status=?, description=?
+                    WHERE id=?`, [name, type_id, address, capacity, status, description, id]);
         res.json({ message: 'Housing unit updated successfully' });
     } catch (err) {
         console.error('Update housing-unit failed:', err, req.body);
@@ -227,11 +319,11 @@ app.put('/api/housing-units/:id', async (req, res) => {
     }
 });
 
-app.delete('/api/housing-units/:id', async (req, res) => {
+app.delete('/api/housing-units/:id', requireSuperAdmin, async (req, res) => {
     const id = req.params.id;
     try {
         const pool = await getPool();
-        await pool.request().input('id', sql.NVarChar(50), id).query('DELETE FROM dbo.housing_units WHERE id = @id');
+        await pool.query('DELETE FROM housing_units WHERE id = ?', [id]);
         res.json({ message: 'Housing unit deleted successfully' });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -239,29 +331,29 @@ app.delete('/api/housing-units/:id', async (req, res) => {
 });
 
 // Rooms
-app.get('/api/rooms', async (req, res) => {
+app.get('/api/rooms', requireAuth, async (req, res) => {
     const housingUnitId = req.query.housing_unit_id;
     let query = `
         SELECT r.*, hu.name as housing_unit_name, hu.address as housing_address
-        FROM dbo.rooms r 
-        JOIN dbo.housing_units hu ON r.housing_unit_id = hu.id`;
+        FROM rooms r 
+        JOIN housing_units hu ON r.housing_unit_id = hu.id`;
     try {
         const pool = await getPool();
-    if (housingUnitId) {
-            query += ' WHERE r.housing_unit_id = @housing_unit_id';
-            const result = await pool.request().input('housing_unit_id', sql.NVarChar(50), housingUnitId).query(query);
-            res.json(result.recordset);
-    } else {
-        query += ' ORDER BY r.room_number';
-            const result = await pool.request().query(query);
-            res.json(result.recordset);
+        if (housingUnitId) {
+            query += ' WHERE r.housing_unit_id = ?';
+            const [rows] = await pool.query(query, [housingUnitId]);
+            res.json(rows);
+        } else {
+            query += ' ORDER BY r.room_number';
+            const [rows] = await pool.query(query);
+            res.json(rows);
         }
     } catch (err) {
                 res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/api/rooms', async (req, res) => {
+app.post('/api/rooms', requireSuperAdmin, async (req, res) => {
     const housing_unit_id = toNullableString(req.body.housing_unit_id);
     const room_number = toNullableString(req.body.room_number);
     const room_type = toNullableString(req.body.room_type);
@@ -271,16 +363,8 @@ app.post('/api/rooms', async (req, res) => {
     const id = uuidv4();
     try {
         const pool = await getPool();
-        await pool.request()
-            .input('id', sql.NVarChar(50), id)
-            .input('housing_unit_id', sql.NVarChar(50), housing_unit_id)
-            .input('room_number', sql.NVarChar(50), room_number)
-            .input('room_type', sql.NVarChar(50), room_type)
-            .input('capacity', sql.Int, capacity)
-            .input('status', sql.NVarChar(50), status)
-            .input('description', sql.NVarChar(sql.MAX), description)
-            .query(`INSERT INTO dbo.rooms (id, housing_unit_id, room_number, room_type, capacity, status, description)
-                    VALUES (@id, @housing_unit_id, @room_number, @room_type, @capacity, @status, @description)`);
+        await pool.query(`INSERT INTO rooms (id, housing_unit_id, room_number, room_type, capacity, status, description)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)`, [id, housing_unit_id, room_number, room_type, capacity, status, description]);
         res.json({ id, housing_unit_id, room_number, room_type, capacity, status, description });
     } catch (err) {
         console.error('Create room failed:', err, req.body);
@@ -288,7 +372,7 @@ app.post('/api/rooms', async (req, res) => {
     }
 });
 
-app.put('/api/rooms/:id', async (req, res) => {
+app.put('/api/rooms/:id', requireSuperAdmin, async (req, res) => {
     const room_number = toNullableString(req.body.room_number);
     const room_type = toNullableString(req.body.room_type);
     const capacity = toIntOrDefault(req.body.capacity, 1);
@@ -297,16 +381,9 @@ app.put('/api/rooms/:id', async (req, res) => {
     const id = req.params.id;
     try {
         const pool = await getPool();
-        await pool.request()
-            .input('id', sql.NVarChar(50), id)
-            .input('room_number', sql.NVarChar(50), room_number)
-            .input('room_type', sql.NVarChar(50), room_type)
-            .input('capacity', sql.Int, capacity)
-            .input('status', sql.NVarChar(50), status)
-            .input('description', sql.NVarChar(sql.MAX), description)
-            .query(`UPDATE dbo.rooms 
-                    SET room_number=@room_number, room_type=@room_type, capacity=@capacity, status=@status, description=@description, updated_at=SYSUTCDATETIME()
-                    WHERE id=@id`);
+        await pool.query(`UPDATE rooms 
+                    SET room_number=?, room_type=?, capacity=?, status=?, description=?
+                    WHERE id=?`, [room_number, room_type, capacity, status, description, id]);
         res.json({ message: 'Room updated successfully' });
     } catch (err) {
         console.error('Update room failed:', err, req.body);
@@ -314,11 +391,11 @@ app.put('/api/rooms/:id', async (req, res) => {
     }
 });
 
-app.delete('/api/rooms/:id', async (req, res) => {
+app.delete('/api/rooms/:id', requireSuperAdmin, async (req, res) => {
     const id = req.params.id;
     try {
         const pool = await getPool();
-        await pool.request().input('id', sql.NVarChar(50), id).query('DELETE FROM dbo.rooms WHERE id=@id');
+        await pool.query('DELETE FROM rooms WHERE id=?', [id]);
         res.json({ message: 'Room deleted successfully' });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -326,30 +403,30 @@ app.delete('/api/rooms/:id', async (req, res) => {
 });
 
 // Inventory Items
-app.get('/api/inventory', async (req, res) => {
+app.get('/api/inventory', requireAuth, async (req, res) => {
     const roomId = req.query.room_id;
     let query = `
         SELECT i.*, r.room_number, r.room_type, hu.name as housing_unit_name
-        FROM dbo.inventory_items i 
-        JOIN dbo.rooms r ON i.room_id = r.id 
-        JOIN dbo.housing_units hu ON r.housing_unit_id = hu.id`;
+        FROM inventory_items i 
+        JOIN rooms r ON i.room_id = r.id 
+        JOIN housing_units hu ON r.housing_unit_id = hu.id`;
     try {
         const pool = await getPool();
-    if (roomId) {
-            query += ' WHERE i.room_id = @room_id';
-            const result = await pool.request().input('room_id', sql.NVarChar(50), roomId).query(query);
-            res.json(result.recordset);
-    } else {
-        query += ' ORDER BY i.name';
-            const result = await pool.request().query(query);
-            res.json(result.recordset);
+        if (roomId) {
+            query += ' WHERE i.room_id = ?';
+            const [rows] = await pool.query(query, [roomId]);
+            res.json(rows);
+        } else {
+            query += ' ORDER BY i.name';
+            const [rows] = await pool.query(query);
+            res.json(rows);
         }
     } catch (err) {
                 res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/api/inventory', async (req, res) => {
+app.post('/api/inventory', requireAdminOrSuperAdmin, async (req, res) => {
     const room_id = toNullableString(req.body.room_id);
     const name = toNullableString(req.body.name);
     const category = toNullableString(req.body.category);
@@ -361,18 +438,8 @@ app.post('/api/inventory', async (req, res) => {
     const id = uuidv4();
     try {
         const pool = await getPool();
-        await pool.request()
-            .input('id', sql.NVarChar(50), id)
-            .input('room_id', sql.NVarChar(50), room_id)
-            .input('name', sql.NVarChar(255), name)
-            .input('category', sql.NVarChar(100), category)
-            .input('quantity', sql.Int, quantity)
-            .input('condition', sql.NVarChar(50), condition)
-            .input('description', sql.NVarChar(sql.MAX), description)
-            .input('purchase_date', sql.Date, purchase_date)
-            .input('warranty_expiry', sql.Date, warranty_expiry)
-            .query(`INSERT INTO dbo.inventory_items (id, room_id, name, category, quantity, condition, description, purchase_date, warranty_expiry)
-                    VALUES (@id, @room_id, @name, @category, @quantity, @condition, @description, @purchase_date, @warranty_expiry)`);
+        await pool.query(`INSERT INTO inventory_items (id, room_id, name, category, quantity, \`condition\`, description, purchase_date, warranty_expiry)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, room_id, name, category, quantity, condition, description, purchase_date, warranty_expiry]);
         res.json({ id, room_id, name, category, quantity, condition, description, purchase_date, warranty_expiry });
     } catch (err) {
         console.error('Create inventory failed:', err, req.body);
@@ -380,7 +447,7 @@ app.post('/api/inventory', async (req, res) => {
     }
 });
 
-app.put('/api/inventory/:id', async (req, res) => {
+app.put('/api/inventory/:id', requireSuperAdmin, async (req, res) => {
     const name = toNullableString(req.body.name);
     const category = toNullableString(req.body.category);
     const quantity = toIntOrDefault(req.body.quantity, 1);
@@ -391,18 +458,9 @@ app.put('/api/inventory/:id', async (req, res) => {
     const id = req.params.id;
     try {
         const pool = await getPool();
-        await pool.request()
-            .input('id', sql.NVarChar(50), id)
-            .input('name', sql.NVarChar(255), name)
-            .input('category', sql.NVarChar(100), category)
-            .input('quantity', sql.Int, quantity)
-            .input('condition', sql.NVarChar(50), condition)
-            .input('description', sql.NVarChar(sql.MAX), description)
-            .input('purchase_date', sql.Date, purchase_date)
-            .input('warranty_expiry', sql.Date, warranty_expiry)
-            .query(`UPDATE dbo.inventory_items 
-                    SET name=@name, category=@category, quantity=@quantity, condition=@condition, description=@description, purchase_date=@purchase_date, warranty_expiry=@warranty_expiry, updated_at=SYSUTCDATETIME()
-                    WHERE id=@id`);
+        await pool.query(`UPDATE inventory_items 
+                    SET name=?, category=?, quantity=?, \`condition\`=?, description=?, purchase_date=?, warranty_expiry=?
+                    WHERE id=?`, [name, category, quantity, condition, description, purchase_date, warranty_expiry, id]);
         res.json({ message: 'Inventory item updated successfully' });
     } catch (err) {
         console.error('Update inventory failed:', err, req.body);
@@ -410,11 +468,11 @@ app.put('/api/inventory/:id', async (req, res) => {
     }
 });
 
-app.delete('/api/inventory/:id', async (req, res) => {
+app.delete('/api/inventory/:id', requireSuperAdmin, async (req, res) => {
     const id = req.params.id;
     try {
         const pool = await getPool();
-        await pool.request().input('id', sql.NVarChar(50), id).query('DELETE FROM dbo.inventory_items WHERE id=@id');
+        await pool.query('DELETE FROM inventory_items WHERE id=?', [id]);
         res.json({ message: 'Inventory item deleted successfully' });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -422,23 +480,23 @@ app.delete('/api/inventory/:id', async (req, res) => {
 });
 
 // Employees
-app.get('/api/employees', async (req, res) => {
+app.get('/api/employees', requireAuth, async (req, res) => {
     const query = `
         SELECT e.*, r.room_number, r.room_type, hu.name as housing_unit_name
-        FROM dbo.employees e 
-        LEFT JOIN dbo.rooms r ON e.assigned_room_id = r.id 
-        LEFT JOIN dbo.housing_units hu ON r.housing_unit_id = hu.id
+        FROM employees e 
+        LEFT JOIN rooms r ON e.assigned_room_id = r.id 
+        LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
         ORDER BY e.name`;
     try {
         const pool = await getPool();
-        const result = await pool.request().query(query);
-        res.json(result.recordset);
+        const [rows] = await pool.query(query);
+        res.json(rows);
     } catch (err) {
             res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/api/employees', async (req, res) => {
+app.post('/api/employees', requireSuperAdmin, async (req, res) => {
     const employee_id = toNullableString(req.body.employee_id);
     const name = toNullableString(req.body.name);
     const department = toNullableString(req.body.department);
@@ -450,18 +508,8 @@ app.post('/api/employees', async (req, res) => {
     const id = uuidv4();
     try {
         const pool = await getPool();
-        await pool.request()
-            .input('id', sql.NVarChar(50), id)
-            .input('employee_id', sql.NVarChar(100), employee_id)
-            .input('name', sql.NVarChar(255), name)
-            .input('department', sql.NVarChar(255), department)
-            .input('position', sql.NVarChar(255), position)
-            .input('email', sql.NVarChar(255), email)
-            .input('phone', sql.NVarChar(50), phone)
-            .input('assigned_room_id', sql.NVarChar(50), assigned_room_id)
-            .input('status', sql.NVarChar(50), status)
-            .query(`INSERT INTO dbo.employees (id, employee_id, name, department, position, email, phone, assigned_room_id, status)
-                    VALUES (@id, @employee_id, @name, @department, @position, @email, @phone, @assigned_room_id, @status)`);
+        await pool.query(`INSERT INTO employees (id, employee_id, name, department, position, email, phone, assigned_room_id, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, employee_id, name, department, position, email, phone, assigned_room_id, status]);
         res.json({ id, employee_id, name, department, position, email, phone, assigned_room_id, status });
     } catch (err) {
         console.error('Create employee failed:', err, req.body);
@@ -469,7 +517,7 @@ app.post('/api/employees', async (req, res) => {
     }
 });
 
-app.put('/api/employees/:id', async (req, res) => {
+app.put('/api/employees/:id', requireSuperAdmin, async (req, res) => {
     const employee_id = toNullableString(req.body.employee_id);
     const name = toNullableString(req.body.name);
     const department = toNullableString(req.body.department);
@@ -481,19 +529,9 @@ app.put('/api/employees/:id', async (req, res) => {
     const id = req.params.id;
     try {
         const pool = await getPool();
-        await pool.request()
-            .input('id', sql.NVarChar(50), id)
-            .input('employee_id', sql.NVarChar(100), employee_id)
-            .input('name', sql.NVarChar(255), name)
-            .input('department', sql.NVarChar(255), department)
-            .input('position', sql.NVarChar(255), position)
-            .input('email', sql.NVarChar(255), email)
-            .input('phone', sql.NVarChar(50), phone)
-            .input('assigned_room_id', sql.NVarChar(50), assigned_room_id)
-            .input('status', sql.NVarChar(50), status)
-            .query(`UPDATE dbo.employees 
-                    SET employee_id=@employee_id, name=@name, department=@department, position=@position, email=@email, phone=@phone, assigned_room_id=@assigned_room_id, status=@status, updated_at=SYSUTCDATETIME()
-                    WHERE id=@id`);
+        await pool.query(`UPDATE employees 
+                    SET employee_id=?, name=?, department=?, position=?, email=?, phone=?, assigned_room_id=?, status=?
+                    WHERE id=?`, [employee_id, name, department, position, email, phone, assigned_room_id, status, id]);
         res.json({ message: 'Employee updated successfully' });
     } catch (err) {
         console.error('Update employee failed:', err, req.body);
@@ -501,11 +539,11 @@ app.put('/api/employees/:id', async (req, res) => {
     }
 });
 
-app.delete('/api/employees/:id', async (req, res) => {
+app.delete('/api/employees/:id', requireSuperAdmin, async (req, res) => {
     const id = req.params.id;
     try {
         const pool = await getPool();
-        await pool.request().input('id', sql.NVarChar(50), id).query('DELETE FROM dbo.employees WHERE id=@id');
+        await pool.query('DELETE FROM employees WHERE id=?', [id]);
         res.json({ message: 'Employee deleted successfully' });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -513,21 +551,116 @@ app.delete('/api/employees/:id', async (req, res) => {
 });
 
 // Dashboard Statistics
-app.get('/api/dashboard/stats', async (req, res) => {
+app.get('/api/dashboard/stats', requireAuth, async (req, res) => {
     try {
         const pool = await getPool();
-        const [housing, rooms, items, employees] = await Promise.all([
-            pool.request().query('SELECT COUNT(1) AS count FROM dbo.housing_units'),
-            pool.request().query('SELECT COUNT(1) AS count FROM dbo.rooms'),
-            pool.request().query('SELECT COUNT(1) AS count FROM dbo.inventory_items'),
-            pool.request().query('SELECT COUNT(1) AS count FROM dbo.employees')
+        const [[h],[r],[i],[e]] = await Promise.all([
+            pool.query('SELECT COUNT(1) AS count FROM housing_units'),
+            pool.query('SELECT COUNT(1) AS count FROM rooms'),
+            pool.query('SELECT COUNT(1) AS count FROM inventory_items'),
+            pool.query('SELECT COUNT(1) AS count FROM employees')
         ]);
         res.json({
-            totalHousing: housing.recordset[0].count,
-            totalRooms: rooms.recordset[0].count,
-            totalItems: items.recordset[0].count,
-            totalEmployees: employees.recordset[0].count
+            totalHousing: h[0].count,
+            totalRooms: r[0].count,
+            totalItems: i[0].count,
+            totalEmployees: e[0].count
         });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// User Management Routes (Super Admin only)
+app.get('/api/users', requireSuperAdmin, async (req, res) => {
+    try {
+        const pool = await getPool();
+        const [rows] = await pool.query('SELECT id, username, role, full_name, email, is_active, created_at FROM users ORDER BY created_at');
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/users', requireSuperAdmin, async (req, res) => {
+    const { username, password, role, full_name, email } = req.body;
+    
+    if (!username || !password || !role || !full_name) {
+        return res.status(400).json({ error: 'Username, password, role, and full name are required' });
+    }
+    
+    if (!['admin', 'super_admin'].includes(role)) {
+        return res.status(400).json({ error: 'Invalid role. Must be admin or super_admin' });
+    }
+    
+    try {
+        const pool = await getPool();
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const id = uuidv4();
+        
+        await pool.query(
+            'INSERT INTO users (id, username, password_hash, role, full_name, email) VALUES (?, ?, ?, ?, ?, ?)',
+            [id, username, hashedPassword, role, full_name, email]
+        );
+        
+        res.json({ message: 'User created successfully', id });
+    } catch (err) {
+        if (err.code === 'ER_DUP_ENTRY') {
+            res.status(400).json({ error: 'Username already exists' });
+        } else {
+            console.error('Create user failed:', err);
+            res.status(500).json({ error: friendlySqlError(err) });
+        }
+    }
+});
+
+app.put('/api/users/:id', requireSuperAdmin, async (req, res) => {
+    const { username, role, full_name, email, is_active } = req.body;
+    const userId = req.params.id;
+    
+    try {
+        const pool = await getPool();
+        
+        // Check if updating password
+        let updateFields = ['role = ?', 'full_name = ?', 'email = ?', 'is_active = ?'];
+        let updateValues = [role, full_name, email, is_active];
+        
+        if (username) {
+            updateFields.push('username = ?');
+            updateValues.push(username);
+        }
+        
+        updateValues.push(userId);
+        
+        await pool.query(
+            `UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`,
+            updateValues
+        );
+        
+        res.json({ message: 'User updated successfully' });
+    } catch (err) {
+        if (err.code === 'ER_DUP_ENTRY') {
+            res.status(400).json({ error: 'Username already exists' });
+        } else {
+            console.error('Update user failed:', err);
+            res.status(500).json({ error: friendlySqlError(err) });
+        }
+    }
+});
+
+app.delete('/api/users/:id', requireSuperAdmin, async (req, res) => {
+    const userId = req.params.id;
+    
+    try {
+        const pool = await getPool();
+        
+        // Prevent deleting the current user
+        if (userId === req.session.user.id) {
+            return res.status(400).json({ error: 'Cannot delete your own account' });
+        }
+        
+        await pool.query('DELETE FROM users WHERE id = ?', [userId]);
+        res.json({ message: 'User deleted successfully' });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -554,10 +687,10 @@ process.on('SIGINT', async () => {
     console.log('\nShutting down server...');
     try {
         const pool = await getPool();
-        await pool.close();
-        console.log('SQL Server connection closed.');
+        await pool.end();
+        console.log('MySQL pool ended.');
     } catch (e) {
-        console.error('Error closing SQL Server connection:', e.message);
+        console.error('Error ending MySQL pool:', e.message);
     } finally {
         process.exit(0);
     }

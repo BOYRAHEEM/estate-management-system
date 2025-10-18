@@ -8,11 +8,71 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 </head>
 <body>
+    <!-- Login Page -->
+    <div id="login-page" class="login-page">
+        <div class="login-container">
+            <div class="login-header">
+                <img src="Asset/HTH logo.jpeg" alt="HTH" class="login-logo">
+                <h1>HTH Estate Management</h1>
+                <p>Please login to access the system</p>
+            </div>
+            <form id="login-form" class="login-form">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-full">Login</button>
+            </form>
+            <div class="login-info">
+                <h3>Default Login Credentials:</h3>
+                <p><strong>Admin:</strong> username: admin, password: admin123</p>
+                <p><strong>Super Admin:</strong> username: superadmin, password: admin123</p>
+            </div>
+        </div>
+    </div>
+
     <div id="app">
         <header class="header">
             <div class="header-content">
-                <h1><img src="Asset/HTH logo.jpeg" alt="HTH" class="header-logo"> HTH Estate Management</h1>
-                <nav class="nav">
+                <div class="header-left">
+                    <div class="header-brand">
+                        <div class="logo-container">
+                            <img src="Asset/HTH logo.jpeg" alt="HTH" class="header-logo">
+                            <div class="logo-overlay"></div>
+                        </div>
+                        <div class="brand-text">
+                            <h1 class="brand-title">HTH Estate</h1>
+                            <span class="brand-subtitle">Management System</span>
+                        </div>
+                    </div>
+                    <div class="burger-menu">
+                        <button class="burger-toggle" id="burger-toggle">
+                            <span class="burger-line"></span>
+                            <span class="burger-line"></span>
+                            <span class="burger-line"></span>
+                        </button>
+                        <div class="burger-dropdown" id="burger-dropdown">
+                            <div class="user-info" id="user-info">
+                                <div class="user-avatar">
+                                    <i class="fas fa-user"></i>
+                                </div>
+                                <div class="user-details">
+                                    <span class="user-name" id="user-name">User</span>
+                                    <span class="role-badge" id="user-role-badge">Role</span>
+                                </div>
+                            </div>
+                            <button class="btn btn-logout" id="logout-btn">
+                                <i class="fas fa-sign-out-alt"></i>
+                                <span>Logout</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <nav class="nav header-nav">
                     <button class="nav-btn active" data-section="dashboard">
                         <i class="fas fa-tachometer-alt"></i> Dashboard
                     </button>
@@ -24,6 +84,9 @@
                     </button>
                     <button class="nav-btn" data-section="employees">
                         <i class="fas fa-users"></i> Employees
+                    </button>
+                    <button class="nav-btn super-admin-only" data-section="users" style="display: none;">
+                        <i class="fas fa-user-cog"></i> Users
                     </button>
                 </nav>
             </div>
@@ -38,10 +101,6 @@
                         <select id="dashboard-type-filter">
                             <option value="">All Types</option>
                         </select>
-                        <label class="auto-refresh-toggle">
-                            <input type="checkbox" id="dashboard-auto-refresh">
-                            <span>Auto-refresh</span>
-                        </label>
                     </div>
                 </div>
                 
@@ -103,48 +162,155 @@
             <!-- Housing Section -->
             <section id="housing" class="section">
                 <div class="section-header">
-                    <h2>Housing Management</h2>
-                    <button class="btn btn-primary" id="add-housing-btn">
-                        <i class="fas fa-plus"></i> Add Housing Unit
-                    </button>
+                    <div class="header-left">
+                        <h2>Housing Management</h2>
+                        <div class="housing-stats">
+                            <span class="stat-badge">
+                                <i class="fas fa-home"></i>
+                                <span id="total-houses-count">0</span> Houses
+                            </span>
+                            <span class="stat-badge">
+                                <i class="fas fa-bed"></i>
+                                <span id="total-bedrooms-count">0</span> Bedrooms
+                            </span>
+                            <span class="stat-badge">
+                                <i class="fas fa-users"></i>
+                                <span id="total-residents-count">0</span> Residents
+                            </span>
+                        </div>
+                    </div>
+                    <div class="header-right">
+                        <button class="btn btn-primary super-admin-only" id="add-housing-btn" style="display: none;">
+                            <i class="fas fa-plus"></i> Add Housing Unit
+                        </button>
+                    </div>
                 </div>
                 
-                <div class="filters">
-                    <select id="housing-type-filter">
-                        <option value="">All Types</option>
-                    </select>
-                    <input type="text" id="housing-search" placeholder="Search housing units...">
+                <div class="housing-controls">
+                    <div class="filters-section">
+                        <div class="filter-group">
+                            <label for="housing-type-filter">Housing Type</label>
+                            <select id="housing-type-filter">
+                                <option value="">All Types</option>
+                                <option value="HTH Bangalore">HTH Bangalore</option>
+                                <option value="Rental Apartment">Rental Apartment</option>
+                                <option value="Housement Flat">Housement Flat</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="occupancy-filter">Occupancy Status</label>
+                            <select id="occupancy-filter">
+                                <option value="">All Status</option>
+                                <option value="full">Fully Occupied</option>
+                                <option value="partial">Partially Occupied</option>
+                                <option value="empty">Vacant</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="search-section">
+                        <div class="search-box">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="housing-search" placeholder="Search housing units...">
+                        </div>
+                    </div>
                 </div>
                 
-                <div id="housing-list" class="housing-grid"></div>
+                <div class="housing-content">
+                    <div id="housing-list" class="housing-grid"></div>
+                </div>
             </section>
 
             <!-- Inventory Section -->
             <section id="inventory" class="section">
                 <div class="section-header">
-                    <h2>Inventory Management</h2>
-                    <button class="btn btn-primary" id="add-item-btn">
-                        <i class="fas fa-plus"></i> Add Item
-                    </button>
+                    <div class="header-left">
+                        <h2>Inventory Management</h2>
+                        <div class="inventory-stats">
+                            <span class="stat-badge">
+                                <i class="fas fa-boxes"></i>
+                                <span id="total-inventory-count">0</span> Items
+                            </span>
+                            <span class="stat-badge">
+                                <i class="fas fa-map-marker-alt"></i>
+                                <span id="total-rooms-count">0</span> Rooms
+                            </span>
+                        </div>
+                    </div>
+                    <div class="header-right">
+                        <div class="view-toggle">
+                            <button class="toggle-btn active" id="grid-view-btn" data-view="grid">
+                                <i class="fas fa-th"></i>
+                            </button>
+                            <button class="toggle-btn" id="list-view-btn" data-view="list">
+                                <i class="fas fa-list"></i>
+                            </button>
+                        </div>
+                        <button class="btn btn-primary" id="add-item-btn">
+                            <i class="fas fa-plus"></i> Add Item
+                        </button>
+                    </div>
                 </div>
                 
-                <div class="filters">
-                    <select id="room-filter">
-                        <option value="">All Rooms</option>
-                    </select>
-                    <input type="text" id="room-search" placeholder="Search rooms...">
-                    <input type="text" id="inventory-search" placeholder="Search inventory...">
-                    <button class="btn btn-outline-secondary" id="inventory-report-all"><i class="fas fa-file-alt"></i><span>All Inventory Report</span></button>
+                <div class="inventory-controls">
+                    <div class="filters-section">
+                        <div class="filter-group">
+                            <label for="room-filter">Room</label>
+                            <select id="room-filter">
+                                <option value="">All Rooms</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="category-filter">Category</label>
+                            <select id="category-filter">
+                                <option value="">All Categories</option>
+                                <option value="Smart TV">Smart TV</option>
+                                <option value="Decoder">Decoder</option>
+                                <option value="Mattress">Mattress</option>
+                                <option value="Table">Table</option>
+                                <option value="Chairs">Chairs</option>
+                                <option value="Sofa">Sofa</option>
+                                <option value="Gas cylinder">Gas cylinder</option>
+                                <option value="Stove">Stove</option>
+                                <option value="Air-conditioner">Air-conditioner</option>
+                                <option value="Bed frame">Bed frame</option>
+                                <option value="Speakers">Speakers</option>
+                                <option value="Mirror">Mirror</option>
+                                <option value="Wall clock">Wall clock</option>
+                                <option value="Bookshelf">Bookshelf</option>
+                                <option value="Pillows">Pillows</option>
+                                <option value="Wardrobe">Wardrobe</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="condition-filter">Condition</label>
+                            <select id="condition-filter">
+                                <option value="">All Conditions</option>
+                                <option value="excellent">Excellent</option>
+                                <option value="good">Good</option>
+                                <option value="fair">Fair</option>
+                                <option value="poor">Poor</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="search-section">
+                        <div class="search-box">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="inventory-search" placeholder="Search items, descriptions...">
+                        </div>
+                    </div>
                 </div>
                 
-                <div id="inventory-list" class="inventory-grid"></div>
+                <div class="inventory-content">
+                    <div id="inventory-list" class="inventory-grid"></div>
+                </div>
             </section>
 
             <!-- Employees Section -->
             <section id="employees" class="section">
                 <div class="section-header">
                     <h2>Employee Management</h2>
-                    <button class="btn btn-primary" id="add-employee-btn">
+                    <button class="btn btn-primary super-admin-only" id="add-employee-btn" style="display: none;">
                         <i class="fas fa-plus"></i> Add Employee
                     </button>
                 </div>
@@ -159,6 +325,22 @@
                         <div class="empty-state"><i class="fas fa-user"></i><h3>Select an employee</h3><p>Click an employee from the list to view details</p></div>
                     </div>
                 </div>
+            </section>
+
+            <!-- Users Management Section (Super Admin only) -->
+            <section id="users" class="section">
+                <div class="section-header">
+                    <h2>User Management</h2>
+                    <button class="btn btn-primary" id="add-user-btn">
+                        <i class="fas fa-plus"></i> Add User
+                    </button>
+                </div>
+                
+                <div class="filters">
+                    <input type="text" id="user-search" placeholder="Search users...">
+                </div>
+                
+                <div id="users-list" class="users-grid"></div>
             </section>
         </main>
     </div>

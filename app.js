@@ -7,20 +7,51 @@ class EstateManagementApp {
         this.rooms = [];
         this.inventoryItems = [];
         this.employees = [];
+        this.users = [];
         this.currentEditId = null;
-        this.dashboardAutoRefreshTimer = null;
+        this.currentUser = null;
+        this.isAuthenticated = false;
         
         this.init();
     }
 
     async init() {
         this.setupEventListeners();
-        await this.loadInitialData();
-        this.showSection('dashboard');
-        this.updateDashboard();
+        
+        // Start with main app visible (assume authenticated until proven otherwise)
+        this.showMainApp();
+        
+        // Check if user is already authenticated
+        await this.checkAuthentication();
+        
+        if (this.isAuthenticated) {
+            await this.loadInitialData();
+            this.showSection('dashboard');
+            this.updateDashboard();
+        } else {
+            // Only show login page if authentication fails
+            this.showLoginPage();
+        }
     }
 
     setupEventListeners() {
+        // Login form
+        const loginForm = document.getElementById('login-form');
+        if (loginForm) {
+            loginForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.handleLogin();
+            });
+        }
+
+        // Logout button
+        const logoutBtn = document.getElementById('logout-btn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', () => {
+                this.handleLogout();
+            });
+        }
+
         // Navigation
         document.querySelectorAll('.nav-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -36,6 +67,54 @@ class EstateManagementApp {
                 if (target) this.showSection(target);
             });
         });
+
+        // Inventory view toggle buttons
+        const gridViewBtn = document.getElementById('grid-view-btn');
+        const listViewBtn = document.getElementById('list-view-btn');
+        
+        if (gridViewBtn && listViewBtn) {
+            gridViewBtn.addEventListener('click', () => {
+                this.setInventoryView('grid');
+            });
+            
+            listViewBtn.addEventListener('click', () => {
+                this.setInventoryView('list');
+            });
+        }
+
+        // Inventory filters
+        const roomFilter = document.getElementById('room-filter');
+        const categoryFilter = document.getElementById('category-filter');
+        const conditionFilter = document.getElementById('condition-filter');
+        const inventorySearch = document.getElementById('inventory-search');
+
+        if (roomFilter) {
+            roomFilter.addEventListener('change', () => this.filterInventory());
+        }
+        if (categoryFilter) {
+            categoryFilter.addEventListener('change', () => this.filterInventory());
+        }
+        if (conditionFilter) {
+            conditionFilter.addEventListener('change', () => this.filterInventory());
+        }
+        if (inventorySearch) {
+            inventorySearch.addEventListener('input', () => this.filterInventory());
+        }
+
+        // Housing filters
+        const housingTypeFilter = document.getElementById('housing-type-filter');
+        const occupancyFilter = document.getElementById('occupancy-filter');
+        const housingSearch = document.getElementById('housing-search');
+
+        if (housingTypeFilter) {
+            housingTypeFilter.addEventListener('change', () => this.filterHousing());
+        }
+        if (occupancyFilter) {
+            occupancyFilter.addEventListener('change', () => this.filterHousing());
+        }
+        if (housingSearch) {
+            housingSearch.addEventListener('input', () => this.filterHousing());
+        }
 
         // Modal controls
         document.getElementById('modal-cancel').addEventListener('click', () => {
@@ -92,36 +171,211 @@ class EstateManagementApp {
             });
         }
 
-        const reportAllBtn = document.getElementById('inventory-report-all');
-        if (reportAllBtn) {
-            reportAllBtn.addEventListener('click', () => {
-                this.renderInventoryReport(this.inventoryItems);
-            });
-        }
 
         document.getElementById('employee-search').addEventListener('input', (e) => {
             this.filterEmployees(e.target.value);
         });
 
         // Dashboard controls
-        const refreshBtn = document.getElementById('dashboard-refresh');
-        const autoRefreshCb = document.getElementById('dashboard-auto-refresh');
         const typeFilter = document.getElementById('dashboard-type-filter');
 
-        if (refreshBtn) {
-            refreshBtn.addEventListener('click', () => this.updateDashboard());
+        if (typeFilter) {
+            typeFilter.addEventListener('change', () => this.updateDashboard());
         }
-        if (autoRefreshCb) {
-            autoRefreshCb.addEventListener('change', (e) => {
-                if (e.target.checked) {
-                    this.startDashboardAutoRefresh();
+
+        // User management
+        const addUserBtn = document.getElementById('add-user-btn');
+        if (addUserBtn) {
+            addUserBtn.addEventListener('click', () => {
+                this.showUserModal();
+            });
+        }
+
+        // Burger menu
+        const burgerToggle = document.getElementById('burger-toggle');
+        const burgerDropdown = document.getElementById('burger-dropdown');
+        console.log('Burger toggle element:', burgerToggle);
+        console.log('Burger dropdown element:', burgerDropdown);
+        
+        if (burgerToggle && burgerDropdown) {
+            burgerToggle.addEventListener('click', (e) => {
+                e.stopPropagation();
+                console.log('Burger toggle clicked');
+                this.toggleBurgerMenu();
+            });
+
+            // Close burger menu when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!burgerToggle.contains(e.target) && !burgerDropdown.contains(e.target)) {
+                    this.closeBurgerMenu();
+                }
+            });
+        } else {
+            console.error('Burger menu elements not found!');
+        }
+    }
+
+    // Authentication Methods
+    async checkAuthentication() {
+        try {
+            const response = await fetch('/api/auth/me', {
+                credentials: 'include'
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                this.currentUser = data.user;
+                this.isAuthenticated = true;
+                this.updateUserInterface();
+                return true;
+            } else {
+                this.isAuthenticated = false;
+                return false;
+            }
+        } catch (error) {
+            console.error('Authentication check failed:', error);
+            this.isAuthenticated = false;
+            return false;
+        }
+    }
+
+    async handleLogin() {
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
+
+        if (!username || !password) {
+            this.showNotification('Please enter both username and password', 'error');
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/login', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                credentials: 'include',
+                body: JSON.stringify({ username, password })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                this.currentUser = data.user;
+                this.isAuthenticated = true;
+                this.updateUserInterface();
+                this.showMainApp();
+                this.showNotification('Login successful!', 'success');
+                
+                // Load data after successful login
+                await this.loadInitialData();
+                this.showSection('dashboard');
+                this.updateDashboard();
+            } else {
+                const errorData = await response.json();
+                this.showNotification(errorData.error || 'Login failed', 'error');
+            }
+        } catch (error) {
+            console.error('Login error:', error);
+            this.showNotification('Login failed. Please try again.', 'error');
+        }
+    }
+
+    async handleLogout() {
+        try {
+            await fetch('/api/logout', {
+                method: 'POST',
+                credentials: 'include'
+            });
+            
+            this.isAuthenticated = false;
+            this.currentUser = null;
+            this.showLoginPage();
+            this.showNotification('Logged out successfully', 'success');
+        } catch (error) {
+            console.error('Logout error:', error);
+            this.showNotification('Logout failed', 'error');
+        }
+    }
+
+    showLoginPage() {
+        document.getElementById('login-page').classList.remove('hidden');
+        document.getElementById('app').classList.add('hidden');
+    }
+
+    showMainApp() {
+        document.getElementById('login-page').classList.add('hidden');
+        document.getElementById('app').classList.remove('hidden');
+    }
+
+    updateUserInterface() {
+        if (this.currentUser) {
+            // Update user info in header
+            document.getElementById('user-name').textContent = this.currentUser.full_name;
+            document.getElementById('user-role-badge').textContent = this.currentUser.role.replace('_', ' ');
+            
+            // Show/hide elements based on role
+            const superAdminElements = document.querySelectorAll('.super-admin-only');
+            superAdminElements.forEach(element => {
+                if (this.currentUser.role === 'super_admin') {
+                    element.classList.add('show');
+                    element.style.display = '';
                 } else {
-                    this.stopDashboardAutoRefresh();
+                    element.classList.remove('show');
+                    element.style.display = 'none';
                 }
             });
         }
-        if (typeFilter) {
-            typeFilter.addEventListener('change', () => this.updateDashboard());
+    }
+
+    toggleBurgerMenu() {
+        const burgerToggle = document.getElementById('burger-toggle');
+        const burgerDropdown = document.getElementById('burger-dropdown');
+        
+        console.log('Toggle burger menu called');
+        console.log('Burger toggle:', burgerToggle);
+        console.log('Burger dropdown:', burgerDropdown);
+        
+        if (burgerToggle && burgerDropdown) {
+            const isActive = burgerDropdown.classList.contains('active');
+            console.log('Is active:', isActive);
+            
+            if (isActive) {
+                console.log('Closing burger menu');
+                this.closeBurgerMenu();
+            } else {
+                console.log('Opening burger menu');
+                this.openBurgerMenu();
+            }
+        } else {
+            console.error('Burger menu elements not found in toggle function!');
+        }
+    }
+
+    openBurgerMenu() {
+        const burgerToggle = document.getElementById('burger-toggle');
+        const burgerDropdown = document.getElementById('burger-dropdown');
+        
+        console.log('Opening burger menu');
+        if (burgerToggle && burgerDropdown) {
+            burgerToggle.classList.add('active');
+            burgerDropdown.classList.add('active');
+            console.log('Classes added - toggle:', burgerToggle.classList.contains('active'), 'dropdown:', burgerDropdown.classList.contains('active'));
+        } else {
+            console.error('Elements not found in openBurgerMenu');
+        }
+    }
+
+    closeBurgerMenu() {
+        const burgerToggle = document.getElementById('burger-toggle');
+        const burgerDropdown = document.getElementById('burger-dropdown');
+        
+        console.log('Closing burger menu');
+        if (burgerToggle && burgerDropdown) {
+            burgerToggle.classList.remove('active');
+            burgerDropdown.classList.remove('active');
+            console.log('Classes removed');
+        } else {
+            console.error('Elements not found in closeBurgerMenu');
         }
     }
 
@@ -152,8 +406,15 @@ class EstateManagementApp {
     }
 
     async fetchData(url) {
-        const response = await fetch(url);
+        const response = await fetch(url, {
+            credentials: 'include'
+        });
         if (!response.ok) {
+            if (response.status === 401) {
+                this.isAuthenticated = false;
+                this.showLoginPage();
+                throw new Error('Authentication required');
+            }
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         return await response.json();
@@ -165,9 +426,15 @@ class EstateManagementApp {
             headers: {
                 'Content-Type': 'application/json',
             },
+            credentials: 'include',
             body: JSON.stringify(data)
         });
         if (!response.ok) {
+            if (response.status === 401) {
+                this.isAuthenticated = false;
+                this.showLoginPage();
+                throw new Error('Authentication required');
+            }
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         return await response.json();
@@ -179,9 +446,15 @@ class EstateManagementApp {
             headers: {
                 'Content-Type': 'application/json',
             },
+            credentials: 'include',
             body: JSON.stringify(data)
         });
         if (!response.ok) {
+            if (response.status === 401) {
+                this.isAuthenticated = false;
+                this.showLoginPage();
+                throw new Error('Authentication required');
+            }
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         return await response.json();
@@ -189,9 +462,15 @@ class EstateManagementApp {
 
     async deleteData(url) {
         const response = await fetch(url, {
-            method: 'DELETE'
+            method: 'DELETE',
+            credentials: 'include'
         });
         if (!response.ok) {
+            if (response.status === 401) {
+                this.isAuthenticated = false;
+                this.showLoginPage();
+                throw new Error('Authentication required');
+            }
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         return await response.json();
@@ -225,6 +504,15 @@ class EstateManagementApp {
                 break;
             case 'employees':
                 this.renderEmployeeList();
+                break;
+            case 'users':
+                if (this.currentUser && this.currentUser.role === 'super_admin') {
+                    this.loadUsers();
+                } else {
+                    this.showNotification('Access denied. Super Admin role required.', 'error');
+                    this.showSection('dashboard');
+                    return;
+                }
                 break;
         }
     }
@@ -301,21 +589,6 @@ class EstateManagementApp {
         typeFilter.innerHTML = '<option value="">All Types</option>' + options;
     }
 
-    startDashboardAutoRefresh() {
-        this.stopDashboardAutoRefresh();
-        this.dashboardAutoRefreshTimer = setInterval(() => {
-            if (this.currentSection === 'dashboard') {
-                this.updateDashboard();
-            }
-        }, 15000);
-    }
-
-    stopDashboardAutoRefresh() {
-        if (this.dashboardAutoRefreshTimer) {
-            clearInterval(this.dashboardAutoRefreshTimer);
-            this.dashboardAutoRefreshTimer = null;
-        }
-    }
 
     renderHousingUnits() {
         const container = document.getElementById('housing-list');
@@ -325,50 +598,145 @@ class EstateManagementApp {
             return;
         }
 
-        container.innerHTML = this.housingUnits.map(unit => `
-            <div class="card">
-                <div class="card-header">
-                    <h3 class="card-title">${unit.name}</h3>
-                    <div class="card-actions">
-                        <button class="btn" onclick="app.manageRooms('${unit.id}')">
-                            <i class="fas fa-bed"></i> Rooms
-                        </button>
-                        <button class="btn btn-secondary" onclick="app.editHousing('${unit.id}')">
-                            <i class="fas fa-edit"></i> Edit
-                        </button>
-                        <button class="btn btn-danger" onclick="app.deleteHousing('${unit.id}')">
-                            <i class="fas fa-trash"></i> Delete
-                        </button>
-                    </div>
+        // Update housing stats
+        this.updateHousingStats();
+
+        // Filter housing based on current filters
+        const filteredHousing = this.getFilteredHousingUnits();
+
+        if (filteredHousing.length === 0) {
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-search"></i><h3>No housing units found</h3><p>Try adjusting your filters or search terms</p></div>';
+            return;
+        }
+
+        container.innerHTML = filteredHousing.map(unit => this.renderHousingCard(unit)).join('');
+    }
+
+    // New housing methods
+    updateHousingStats() {
+        const totalHousesCount = document.getElementById('total-houses-count');
+        const totalBedroomsCount = document.getElementById('total-bedrooms-count');
+        const totalResidentsCount = document.getElementById('total-residents-count');
+        
+        if (totalHousesCount) {
+            totalHousesCount.textContent = this.housingUnits.length;
+        }
+        if (totalBedroomsCount) {
+            totalBedroomsCount.textContent = this.housingUnits.length * 3; // 3 bedrooms per house
+        }
+        if (totalResidentsCount) {
+            totalResidentsCount.textContent = this.employees.filter(emp => emp.assigned_room_id).length;
+        }
+    }
+
+    renderHousingCard(unit) {
+        // Get rooms for this housing unit
+        const unitRooms = this.rooms.filter(room => room.housing_unit_id === unit.id);
+        
+        // Calculate occupancy
+        const occupiedRooms = unitRooms.filter(room => 
+            this.employees.some(emp => emp.assigned_room_id === room.id)
+        );
+        
+        const occupancyStatus = occupiedRooms.length === 3 ? 'full' : 
+                               occupiedRooms.length > 0 ? 'partial' : 'empty';
+        
+        const occupancyText = occupancyStatus === 'full' ? 'Fully Occupied' :
+                             occupancyStatus === 'partial' ? 'Partially Occupied' : 'Vacant';
+
+        // Get bedroom details
+        const bedrooms = unitRooms.map(room => {
+            const occupant = this.employees.find(emp => emp.assigned_room_id === room.id);
+            return {
+                name: room.name,
+                occupant: occupant ? occupant.name : null,
+                status: occupant ? 'occupied' : 'vacant'
+            };
+        });
+
+        return `
+            <div class="housing-card">
+                <div class="housing-header">
+                    <h3 class="housing-title">${unit.name}</h3>
+                    <span class="housing-type-badge">${unit.type_name}</span>
                 </div>
-                <div class="card-content">
-                    <div class="card-item">
-                        <span class="card-label">Type:</span>
-                        <span class="card-value">${unit.type_name}</span>
+                
+                <div class="housing-details">
+                    <div class="housing-detail-item">
+                        <span class="housing-detail-label">Housing Type</span>
+                        <span class="housing-detail-value">${unit.type_name}</span>
                     </div>
-                    <div class="card-item">
-                        <span class="card-label">Address:</span>
-                        <span class="card-value">${unit.address}</span>
-                    </div>
-                    <div class="card-item">
-                        <span class="card-label">Capacity:</span>
-                        <span class="card-value">${unit.capacity} people</span>
-                    </div>
-                    <div class="card-item">
-                        <span class="card-label">Status:</span>
-                        <span class="card-value">
-                            <span class="status-badge status-${unit.status}">${unit.status}</span>
+                    <div class="housing-detail-item">
+                        <span class="housing-detail-label">Occupancy</span>
+                        <span class="occupancy-status ${occupancyStatus}">
+                            <i class="fas fa-${occupancyStatus === 'full' ? 'check-circle' : occupancyStatus === 'partial' ? 'exclamation-circle' : 'times-circle'}"></i>
+                            ${occupancyText}
                         </span>
                     </div>
-                    ${unit.description ? `
-                    <div class="card-item">
-                        <span class="card-label">Description:</span>
-                        <span class="card-value">${unit.description}</span>
+                </div>
+
+                <div class="bedrooms-section">
+                    <div class="bedrooms-title">
+                        <i class="fas fa-bed"></i>
+                        Bedrooms (${occupiedRooms.length}/3 occupied)
                     </div>
-                    ` : ''}
+                    <div class="bedrooms-grid">
+                        ${bedrooms.map(bedroom => `
+                            <div class="bedroom-item">
+                                <div class="bedroom-info">
+                                    <div class="bedroom-name">${bedroom.name}</div>
+                                    <div class="bedroom-occupant">${bedroom.occupant || 'Vacant'}</div>
+                                </div>
+                                <span class="bedroom-status ${bedroom.status}">
+                                    ${bedroom.status === 'occupied' ? 'Occupied' : 'Vacant'}
+                                </span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <div class="housing-actions">
+                    <button class="btn" onclick="app.manageRooms('${unit.id}')">
+                        <i class="fas fa-bed"></i> Manage Rooms
+                    </button>
+                    <button class="btn btn-secondary" onclick="app.editHousing('${unit.id}')">
+                        <i class="fas fa-edit"></i> Edit
+                    </button>
+                    <button class="btn btn-danger" onclick="app.deleteHousing('${unit.id}')">
+                        <i class="fas fa-trash"></i> Delete
+                    </button>
                 </div>
             </div>
-        `).join('');
+        `;
+    }
+
+    getFilteredHousingUnits() {
+        const typeFilter = document.getElementById('housing-type-filter')?.value || '';
+        const occupancyFilter = document.getElementById('occupancy-filter')?.value || '';
+        const searchTerm = document.getElementById('housing-search')?.value?.toLowerCase() || '';
+
+        return this.housingUnits.filter(unit => {
+            const matchesType = !typeFilter || unit.type_name === typeFilter;
+            
+            // Calculate occupancy for this unit
+            const unitRooms = this.rooms.filter(room => room.housing_unit_id === unit.id);
+            const occupiedRooms = unitRooms.filter(room => 
+                this.employees.some(emp => emp.assigned_room_id === room.id)
+            );
+            const occupancyStatus = occupiedRooms.length === 3 ? 'full' : 
+                                   occupiedRooms.length > 0 ? 'partial' : 'empty';
+            const matchesOccupancy = !occupancyFilter || occupancyStatus === occupancyFilter;
+            
+            const matchesSearch = !searchTerm || 
+                unit.name.toLowerCase().includes(searchTerm) ||
+                unit.type_name.toLowerCase().includes(searchTerm);
+
+            return matchesType && matchesOccupancy && matchesSearch;
+        });
+    }
+
+    filterHousing() {
+        this.renderHousingUnits();
     }
 
     renderInventoryItems() {
@@ -379,8 +747,93 @@ class EstateManagementApp {
             return;
         }
 
+        // Update inventory stats
+        this.updateInventoryStats();
+
         // Default view: group by room
         this.renderGroupedInventoryByRoom(this.rooms, this.inventoryItems);
+    }
+
+    // New inventory methods
+    updateInventoryStats() {
+        const totalInventoryCount = document.getElementById('total-inventory-count');
+        const totalRoomsCount = document.getElementById('total-rooms-count');
+        
+        if (totalInventoryCount) {
+            totalInventoryCount.textContent = this.inventoryItems.length;
+        }
+        if (totalRoomsCount) {
+            totalRoomsCount.textContent = this.rooms.length;
+        }
+    }
+
+    setInventoryView(view) {
+        const container = document.getElementById('inventory-list');
+        const gridBtn = document.getElementById('grid-view-btn');
+        const listBtn = document.getElementById('list-view-btn');
+        
+        if (view === 'list') {
+            container.classList.add('list-view');
+            gridBtn.classList.remove('active');
+            listBtn.classList.add('active');
+        } else {
+            container.classList.remove('list-view');
+            gridBtn.classList.add('active');
+            listBtn.classList.remove('active');
+        }
+        
+        // Re-render with new view
+        this.renderInventoryItems();
+    }
+
+    getFilteredInventoryItems() {
+        const roomFilter = document.getElementById('room-filter')?.value || '';
+        const categoryFilter = document.getElementById('category-filter')?.value || '';
+        const conditionFilter = document.getElementById('condition-filter')?.value || '';
+        const searchTerm = document.getElementById('inventory-search')?.value?.toLowerCase() || '';
+
+        return this.inventoryItems.filter(item => {
+            const matchesRoom = !roomFilter || item.room_id === roomFilter;
+            const matchesCategory = !categoryFilter || item.category === categoryFilter;
+            const matchesCondition = !conditionFilter || item.condition === conditionFilter;
+            const matchesSearch = !searchTerm || 
+                item.name.toLowerCase().includes(searchTerm) ||
+                item.description?.toLowerCase().includes(searchTerm) ||
+                item.category?.toLowerCase().includes(searchTerm);
+
+            return matchesRoom && matchesCategory && matchesCondition && matchesSearch;
+        });
+    }
+
+    filterInventory() {
+        const container = document.getElementById('inventory-list');
+        const filteredItems = this.getFilteredInventoryItems();
+
+        if (filteredItems.length === 0) {
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-search"></i><h3>No items found</h3><p>Try adjusting your filters or search terms</p></div>';
+            return;
+        }
+
+        // Re-render with filtered items
+        this.renderGroupedInventoryByRoom(this.rooms, filteredItems);
+    }
+
+    handleItemCategoryChange() {
+        const categorySelect = document.getElementById('item-category');
+        const customItemGroup = document.getElementById('custom-item-group');
+        const customItemInput = document.getElementById('item-name');
+        
+        if (categorySelect && customItemGroup && customItemInput) {
+            if (categorySelect.value === 'Other') {
+                customItemGroup.style.display = 'block';
+                customItemInput.required = true;
+                customItemInput.value = '';
+            } else {
+                customItemGroup.style.display = 'none';
+                customItemInput.required = false;
+                customItemInput.value = categorySelect.value;
+            }
+        }
     }
 
     renderEmployeeList(filtered = null) {
@@ -526,8 +979,32 @@ class EstateManagementApp {
         const content = `
             <form id="inventory-form">
                 <div class="form-group">
-                    <label for="item-name">Name *</label>
-                    <input type="text" id="item-name" value="${item?.name || ''}" required>
+                    <label for="item-category">Item Type *</label>
+                    <select id="item-category" required onchange="app.handleItemCategoryChange()">
+                        <option value="">Select item type</option>
+                        <option value="Smart TV" ${item?.category === 'Smart TV' ? 'selected' : ''}>Smart TV</option>
+                        <option value="Decoder" ${item?.category === 'Decoder' ? 'selected' : ''}>Decoder</option>
+                        <option value="Mattress" ${item?.category === 'Mattress' ? 'selected' : ''}>Mattress</option>
+                        <option value="Table" ${item?.category === 'Table' ? 'selected' : ''}>Table</option>
+                        <option value="Chairs" ${item?.category === 'Chairs' ? 'selected' : ''}>Chairs</option>
+                        <option value="Sofa" ${item?.category === 'Sofa' ? 'selected' : ''}>Sofa</option>
+                        <option value="Gas cylinder" ${item?.category === 'Gas cylinder' ? 'selected' : ''}>Gas cylinder</option>
+                        <option value="Stove" ${item?.category === 'Stove' ? 'selected' : ''}>Stove</option>
+                        <option value="Air-conditioner" ${item?.category === 'Air-conditioner' ? 'selected' : ''}>Air-conditioner</option>
+                        <option value="Bed frame" ${item?.category === 'Bed frame' ? 'selected' : ''}>Bed frame</option>
+                        <option value="Speakers" ${item?.category === 'Speakers' ? 'selected' : ''}>Speakers</option>
+                        <option value="Mirror" ${item?.category === 'Mirror' ? 'selected' : ''}>Mirror</option>
+                        <option value="Wall clock" ${item?.category === 'Wall clock' ? 'selected' : ''}>Wall clock</option>
+                        <option value="Bookshelf" ${item?.category === 'Bookshelf' ? 'selected' : ''}>Bookshelf</option>
+                        <option value="Pillows" ${item?.category === 'Pillows' ? 'selected' : ''}>Pillows</option>
+                        <option value="Wardrobe" ${item?.category === 'Wardrobe' ? 'selected' : ''}>Wardrobe</option>
+                        <option value="Other" ${item?.category === 'Other' ? 'selected' : ''}>Other (Custom Item)</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="custom-item-group" style="display: none;">
+                    <label for="item-name">Custom Item Name *</label>
+                    <input type="text" id="item-name" placeholder="Enter custom item name" value="${item?.category === 'Other' ? item?.name : ''}">
                 </div>
                 
                 <div class="form-group">
@@ -544,13 +1021,19 @@ class EstateManagementApp {
                 
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="item-category">Category *</label>
-                        <input type="text" id="item-category" value="${item?.category || ''}" required>
+                        <label for="item-quantity">Quantity *</label>
+                        <input type="number" id="item-quantity" value="${item?.quantity || 1}" min="1" required>
                     </div>
                     
                     <div class="form-group">
-                        <label for="item-quantity">Quantity</label>
-                        <input type="number" id="item-quantity" value="${item?.quantity || 1}" min="1">
+                        <label for="item-unit">Unit</label>
+                        <select id="item-unit">
+                            <option value="pcs" ${item?.unit === 'pcs' ? 'selected' : ''}>Pieces</option>
+                            <option value="set" ${item?.unit === 'set' ? 'selected' : ''}>Set</option>
+                            <option value="pair" ${item?.unit === 'pair' ? 'selected' : ''}>Pair</option>
+                            <option value="kg" ${item?.unit === 'kg' ? 'selected' : ''}>Kilogram</option>
+                            <option value="liter" ${item?.unit === 'liter' ? 'selected' : ''}>Liter</option>
+                        </select>
                     </div>
                 </div>
                 
@@ -696,11 +1179,15 @@ class EstateManagementApp {
     }
 
     async saveInventory(id, keepOpen = false) {
+        const category = document.getElementById('item-category').value;
+        const customName = document.getElementById('item-name').value;
+        
         const data = {
-            name: document.getElementById('item-name').value,
+            name: category === 'Other' ? customName : category,
             room_id: document.getElementById('item-room').value,
-            category: document.getElementById('item-category').value,
+            category: category,
             quantity: parseInt(document.getElementById('item-quantity').value),
+            unit: document.getElementById('item-unit').value,
             condition: document.getElementById('item-condition').value,
             description: document.getElementById('item-description').value,
             purchase_date: document.getElementById('item-purchase-date').value,
@@ -774,7 +1261,7 @@ class EstateManagementApp {
             
             this.closeModal();
             await this.loadInitialData();
-            this.renderEmployees();
+            this.renderEmployeeList();
             this.updateDashboard();
         } catch (error) {
             console.error('Error saving employee:', error);
@@ -839,7 +1326,7 @@ class EstateManagementApp {
                 await this.deleteData(`/api/employees/${id}`);
                 this.showNotification('Employee deleted successfully', 'success');
                 await this.loadInitialData();
-                this.renderEmployees();
+                this.renderEmployeeList();
                 this.updateDashboard();
             } catch (error) {
                 console.error('Error deleting employee:', error);
@@ -1137,7 +1624,7 @@ class EstateManagementApp {
             (item.room_type + '').toLowerCase().includes(term) ||
             (item.description || '').toLowerCase().includes(term)
         );
-        this.renderInventoryReport(filtered);
+        this.renderFilteredInventory(filtered);
     }
 
     filterInventoryByRoom(roomId) {
@@ -1165,12 +1652,14 @@ class EstateManagementApp {
                 <div class="card-header">
                     <h3 class="card-title">${item.name}</h3>
                     <div class="card-actions">
+                        ${this.currentUser && this.currentUser.role === 'super_admin' ? `
                         <button class="btn btn-secondary" onclick="app.editInventory('${item.id}')">
                             <i class="fas fa-edit"></i> Edit
                         </button>
                         <button class="btn btn-danger" onclick="app.deleteInventory('${item.id}')">
                             <i class="fas fa-trash"></i> Delete
                         </button>
+                        ` : ''}
                     </div>
                 </div>
                 <div class="card-content">
@@ -1203,101 +1692,6 @@ class EstateManagementApp {
         `).join('');
     }
 
-    renderInventoryReport(items) {
-        const container = document.getElementById('inventory-list');
-        if (!items || items.length === 0) {
-            container.innerHTML = '<div class="empty-state"><i class="fas fa-search"></i><h3>No inventory items found</h3><p>Try another search term</p></div>';
-            return;
-        }
-        const rows = items.map(item => `
-            <tr>
-                <td>${item.name}</td>
-                <td>${item.category}</td>
-                <td>${item.quantity}</td>
-                <td><span class="status-badge status-${item.condition}">${item.condition}</span></td>
-                <td>${item.housing_unit_name}</td>
-                <td>${item.room_number}</td>
-                <td>${item.room_type}</td>
-                <td>${item.purchase_date || ''}</td>
-                <td>${item.warranty_expiry || ''}</td>
-                <td>${item.description || ''}</td>
-                <td style="white-space:nowrap">
-                    <button class="btn btn-secondary btn-sm" onclick="app.editInventory('${item.id}')"><i class="fas fa-edit"></i><span>Edit</span></button>
-                    <button class="btn btn-danger btn-sm" onclick="app.deleteInventory('${item.id}')"><i class="fas fa-trash"></i><span>Delete</span></button>
-                </td>
-            </tr>
-        `).join('');
-        const totalQty = items.reduce((sum, i) => sum + (parseInt(i.quantity) || 0), 0);
-        container.innerHTML = `
-            <div class="report-header">
-                <div class="report-summary">Items: <strong>${items.length}</strong> • Total Qty: <strong>${totalQty}</strong></div>
-                <div class="report-actions">
-                    <button class="btn btn-outline-secondary btn-sm" id="report-export-csv"><i class="fas fa-download"></i><span>CSV</span></button>
-                    <button class="btn btn-outline-secondary btn-sm" id="report-print"><i class="fas fa-print"></i><span>Print</span></button>
-                </div>
-            </div>
-            <div class="table-responsive">
-                <table class="table" id="inventory-report-table">
-                    <thead>
-                        <tr>
-                            <th class="sortable" data-key="name">Item</th>
-                            <th class="sortable" data-key="category">Category</th>
-                            <th class="sortable" data-key="quantity">Qty</th>
-                            <th class="sortable" data-key="condition">Condition</th>
-                            <th class="sortable" data-key="housing_unit_name">Unit</th>
-                            <th class="sortable" data-key="room_number">Room #</th>
-                            <th class="sortable" data-key="room_type">Room Type</th>
-                            <th class="sortable" data-key="purchase_date">Purchase Date</th>
-                            <th class="sortable" data-key="warranty_expiry">Warranty Expiry</th>
-                            <th>Description</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${rows}
-                    </tbody>
-                </table>
-            </div>`;
-        // Wire actions
-        const exportBtn = document.getElementById('report-export-csv');
-        if (exportBtn) exportBtn.onclick = () => this.exportInventoryCsv(items);
-        const printBtn = document.getElementById('report-print');
-        if (printBtn) printBtn.onclick = () => window.print();
-        const table = document.getElementById('inventory-report-table');
-        if (table) {
-            table.querySelectorAll('th.sortable').forEach(th => {
-                th.addEventListener('click', () => {
-                    const key = th.getAttribute('data-key');
-                    const sorted = [...items].sort((a,b) => {
-                        const av = (a[key] || '').toString().toLowerCase();
-                        const bv = (b[key] || '').toString().toLowerCase();
-                        if (key === 'quantity' || key === 'room_number') {
-                            return (parseInt(a[key])||0) - (parseInt(b[key])||0);
-                        }
-                        return av.localeCompare(bv);
-                    });
-                    this.renderInventoryReport(sorted);
-                });
-            });
-        }
-    }
-
-    exportInventoryCsv(items) {
-        const headers = ['Item','Category','Qty','Condition','Unit','Room #','Room Type','Purchase Date','Warranty Expiry','Description'];
-        const rows = items.map(i => [
-            i.name, i.category, i.quantity, i.condition, i.housing_unit_name, i.room_number, i.room_type, i.purchase_date||'', i.warranty_expiry||'', (i.description||'').replace(/\n/g,' ')
-        ]);
-        const csv = [headers, ...rows].map(r => r.map(v => `"${(v!=null?v:'').toString().replace(/"/g,'""')}"`).join(',')).join('\n');
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'inventory-report.csv';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    }
 
     filterInventoryByRoomSearch(searchTerm) {
         const lower = searchTerm.trim().toLowerCase();
@@ -1331,13 +1725,16 @@ class EstateManagementApp {
                         <div class="card-header">
                             <h3 class="card-title">${item.name}</h3>
                             <div class="card-actions">
+                                <button class="btn btn-soft-danger btn-sm" onclick="app.reportDamage('${item.id}')"><i class="fas fa-exclamation-triangle"></i> Report Damage</button>
+                                ${this.currentUser && this.currentUser.role === 'super_admin' ? `
                                 <button class="btn btn-secondary" onclick="app.editInventory('${item.id}')"><i class="fas fa-edit"></i> Edit</button>
                                 <button class="btn btn-danger" onclick="app.deleteInventory('${item.id}')"><i class="fas fa-trash"></i> Delete</button>
+                                ` : ''}
                             </div>
                         </div>
                         <div class="card-content">
                             <div class="card-item"><span class="card-label">Category:</span><span class="card-value">${item.category}</span></div>
-                            <div class="card-item"><span class="card-label">Quantity:</span><span class="card-value">${item.quantity}</span></div>
+                            <div class="card-item"><span class="card-label">Quantity:</span><span class="card-value">${item.quantity} ${item.unit || 'pcs'}</span></div>
                             <div class="card-item"><span class="card-label">Condition:</span><span class="card-value"><span class="status-badge status-${item.condition}">${item.condition}</span></span></div>
                             ${item.description ? `<div class="card-item"><span class="card-label">Description:</span><span class="card-value">${item.description}</span></div>` : ''}
                         </div>
@@ -1369,6 +1766,114 @@ class EstateManagementApp {
     }
 
     renderFilteredEmployees(_) { /* no-op in master-detail; kept for compatibility */ }
+
+    reportDamage(itemId) {
+        const item = this.inventoryItems.find(i => i.id === itemId);
+        if (!item) return;
+
+        const title = `Report Damage - ${item.name}`;
+        const content = `
+            <form id="damage-report-form">
+                <div class="form-group">
+                    <label for="damage-type">Damage Type *</label>
+                    <select id="damage-type" required>
+                        <option value="">Select damage type</option>
+                        <option value="broken">Broken</option>
+                        <option value="cracked">Cracked</option>
+                        <option value="scratched">Scratched</option>
+                        <option value="dented">Dented</option>
+                        <option value="malfunctioning">Malfunctioning</option>
+                        <option value="worn">Worn</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="damage-severity">Severity *</label>
+                    <select id="damage-severity" required>
+                        <option value="">Select severity</option>
+                        <option value="minor">Minor</option>
+                        <option value="moderate">Moderate</option>
+                        <option value="severe">Severe</option>
+                        <option value="critical">Critical</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="damage-description">Damage Description *</label>
+                    <textarea id="damage-description" rows="3" placeholder="Describe the damage in detail..." required></textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label for="reported-by">Reported By *</label>
+                    <input type="text" id="reported-by" placeholder="Your name" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="damage-date">Date of Damage</label>
+                    <input type="date" id="damage-date">
+                </div>
+                
+                <div class="form-group">
+                    <label for="estimated-repair-cost">Estimated Repair Cost</label>
+                    <input type="number" id="estimated-repair-cost" placeholder="0.00" step="0.01" min="0">
+                </div>
+                
+                <div class="form-group">
+                    <label for="repair-notes">Repair Notes</label>
+                    <textarea id="repair-notes" rows="2" placeholder="Any additional notes for repair..."></textarea>
+                </div>
+            </form>
+        `;
+        
+        this.showModal(title, content);
+        
+        document.getElementById('modal-save').onclick = () => {
+            this.submitDamageReport(itemId);
+        };
+    }
+
+    async submitDamageReport(itemId) {
+        const form = document.getElementById('damage-report-form');
+        const formData = {
+            item_id: itemId,
+            damage_type: document.getElementById('damage-type').value,
+            severity: document.getElementById('damage-severity').value,
+            description: document.getElementById('damage-description').value,
+            reported_by: document.getElementById('reported-by').value,
+            damage_date: document.getElementById('damage-date').value,
+            estimated_cost: document.getElementById('estimated-repair-cost').value,
+            repair_notes: document.getElementById('repair-notes').value
+        };
+
+        // Validate required fields
+        if (!formData.damage_type || !formData.severity || !formData.description || !formData.reported_by) {
+            this.showNotification('Please fill in all required fields', 'error');
+            return;
+        }
+
+        try {
+            // Update the item condition to 'damaged' and add damage report
+            await this.putData(`/api/inventory/${itemId}`, {
+                condition: 'damaged',
+                description: formData.description
+            });
+            
+            // Store damage report (you might want to create a separate API endpoint for this)
+            console.log('Damage Report:', formData);
+            
+            this.showNotification('Damage report submitted successfully', 'success');
+            this.closeModal();
+            
+            // Refresh inventory display
+            await this.loadInitialData();
+            this.renderInventoryItems();
+            this.updateDashboard();
+        } catch (error) {
+            console.error('Error submitting damage report:', error);
+            this.showNotification('Error submitting damage report', 'error');
+        }
+    }
 
     showNotification(message, type = 'info') {
         // Create notification element
@@ -1420,6 +1925,208 @@ class EstateManagementApp {
                 }
             }, 300);
         }, 3000);
+    }
+
+    // User Management Methods (Super Admin only)
+    async loadUsers() {
+        try {
+            this.users = await this.fetchData('/api/users');
+            this.renderUsers();
+        } catch (error) {
+            console.error('Error loading users:', error);
+            this.showNotification('Error loading users', 'error');
+        }
+    }
+
+    renderUsers() {
+        const container = document.getElementById('users-list');
+        
+        if (this.users.length === 0) {
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-users"></i><h3>No users found</h3><p>Add your first user to get started</p></div>';
+            return;
+        }
+
+        container.innerHTML = this.users.map(user => `
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">${user.full_name}</h3>
+                    <div class="card-actions">
+                        <button class="btn btn-secondary" onclick="app.editUser('${user.id}')">
+                            <i class="fas fa-edit"></i> Edit
+                        </button>
+                        <button class="btn btn-danger" onclick="app.deleteUser('${user.id}')">
+                            <i class="fas fa-trash"></i> Delete
+                        </button>
+                    </div>
+                </div>
+                <div class="card-content">
+                    <div class="card-item">
+                        <span class="card-label">Username:</span>
+                        <span class="card-value">${user.username}</span>
+                    </div>
+                    <div class="card-item">
+                        <span class="card-label">Role:</span>
+                        <span class="card-value">
+                            <span class="status-badge status-${user.role}">${user.role.replace('_', ' ')}</span>
+                        </span>
+                    </div>
+                    <div class="card-item">
+                        <span class="card-label">Status:</span>
+                        <span class="card-value">
+                            <span class="status-badge status-${user.is_active ? 'active' : 'inactive'}">${user.is_active ? 'Active' : 'Inactive'}</span>
+                        </span>
+                    </div>
+                    ${user.email ? `
+                    <div class="card-item">
+                        <span class="card-label">Email:</span>
+                        <span class="card-value">${user.email}</span>
+                    </div>
+                    ` : ''}
+                    <div class="card-item">
+                        <span class="card-label">Created:</span>
+                        <span class="card-value">${new Date(user.created_at).toLocaleDateString()}</span>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    showUserModal(user = null) {
+        const isEdit = user !== null;
+        const title = isEdit ? 'Edit User' : 'Add User';
+        
+        const content = `
+            <form id="user-form">
+                <div class="form-group">
+                    <label for="user-username">Username *</label>
+                    <input type="text" id="user-username" value="${user?.username || ''}" required>
+                </div>
+                
+                ${!isEdit ? `
+                <div class="form-group">
+                    <label for="user-password">Password *</label>
+                    <input type="password" id="user-password" required>
+                </div>
+                ` : ''}
+                
+                <div class="form-group">
+                    <label for="user-full-name">Full Name *</label>
+                    <input type="text" id="user-full-name" value="${user?.full_name || ''}" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="user-email">Email</label>
+                    <input type="email" id="user-email" value="${user?.email || ''}">
+                </div>
+                
+                <div class="form-group">
+                    <label for="user-role">Role *</label>
+                    <select id="user-role" required>
+                        <option value="">Select role</option>
+                        <option value="admin" ${user?.role === 'admin' ? 'selected' : ''}>Admin</option>
+                        <option value="super_admin" ${user?.role === 'super_admin' ? 'selected' : ''}>Super Admin</option>
+                    </select>
+                </div>
+                
+                ${isEdit ? `
+                <div class="form-group">
+                    <label for="user-status">Status</label>
+                    <select id="user-status">
+                        <option value="true" ${user?.is_active ? 'selected' : ''}>Active</option>
+                        <option value="false" ${!user?.is_active ? 'selected' : ''}>Inactive</option>
+                    </select>
+                </div>
+                ` : ''}
+            </form>
+        `;
+        
+        this.showModal(title, content);
+        
+        document.getElementById('modal-save').onclick = () => {
+            this.saveUser(user?.id);
+        };
+    }
+
+    async saveUser(id) {
+        const data = {
+            username: document.getElementById('user-username').value,
+            full_name: document.getElementById('user-full-name').value,
+            email: document.getElementById('user-email').value,
+            role: document.getElementById('user-role').value,
+            is_active: document.getElementById('user-status') ? document.getElementById('user-status').value === 'true' : true
+        };
+
+        if (!id) {
+            data.password = document.getElementById('user-password').value;
+        }
+
+        // Debug: Log the form data and individual field values
+        console.log('Form data:', data);
+        console.log('Is edit mode:', !!id);
+        console.log('Role field value:', document.getElementById('user-role').value);
+        console.log('Role field element:', document.getElementById('user-role'));
+
+        // Validate required fields
+        const missingFields = [];
+        if (!data.username.trim()) missingFields.push('Username');
+        if (!data.full_name.trim()) missingFields.push('Full Name');
+        if (!data.role || data.role === '') missingFields.push('Role');
+        if (!id && !data.password.trim()) missingFields.push('Password');
+
+        console.log('Missing fields:', missingFields);
+        console.log('Role validation - data.role:', data.role, 'type:', typeof data.role, 'empty check:', data.role === '');
+
+        if (missingFields.length > 0) {
+            this.showNotification(`Please fill in: ${missingFields.join(', ')}`, 'error');
+            return;
+        }
+
+        try {
+            if (id) {
+                await this.putData(`/api/users/${id}`, data);
+                this.showNotification('User updated successfully', 'success');
+            } else {
+                await this.postData('/api/users', data);
+                this.showNotification('User created successfully', 'success');
+            }
+            
+            this.closeModal();
+            await this.loadUsers();
+        } catch (error) {
+            console.error('Error saving user:', error);
+            let errorMessage = 'Error saving user';
+            
+            // Try to extract more specific error message
+            if (error.message.includes('403')) {
+                errorMessage = 'Access denied. Only Super Admin can create users.';
+            } else if (error.message.includes('401')) {
+                errorMessage = 'Authentication required. Please login again.';
+            } else if (error.message.includes('400')) {
+                errorMessage = 'Invalid data. Please check your input.';
+            }
+            
+            this.showNotification(errorMessage, 'error');
+        }
+    }
+
+    async editUser(id) {
+        const user = this.users.find(u => u.id === id);
+        if (user) {
+            this.showUserModal(user);
+        }
+    }
+
+    async deleteUser(id) {
+        if (confirm('Are you sure you want to delete this user?')) {
+            try {
+                await this.deleteData(`/api/users/${id}`);
+                this.showNotification('User deleted successfully', 'success');
+                await this.loadUsers();
+            } catch (error) {
+                console.error('Error deleting user:', error);
+                this.showNotification('Error deleting user', 'error');
+            }
+        }
     }
 }
 
