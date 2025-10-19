@@ -27,11 +27,6 @@
                 </div>
                 <button type="submit" class="btn btn-primary btn-full">Login</button>
             </form>
-            <div class="login-info">
-                <h3>Default Login Credentials:</h3>
-                <p><strong>Admin:</strong> username: admin, password: admin123</p>
-                <p><strong>Super Admin:</strong> username: superadmin, password: admin123</p>
-            </div>
         </div>
     </div>
 
@@ -47,28 +42,6 @@
                         <div class="brand-text">
                             <h1 class="brand-title">HTH Estate</h1>
                             <span class="brand-subtitle">Management System</span>
-                        </div>
-                    </div>
-                    <div class="burger-menu">
-                        <button class="burger-toggle" id="burger-toggle">
-                            <span class="burger-line"></span>
-                            <span class="burger-line"></span>
-                            <span class="burger-line"></span>
-                        </button>
-                        <div class="burger-dropdown" id="burger-dropdown">
-                            <div class="user-info" id="user-info">
-                                <div class="user-avatar">
-                                    <i class="fas fa-user"></i>
-                                </div>
-                                <div class="user-details">
-                                    <span class="user-name" id="user-name">User</span>
-                                    <span class="role-badge" id="user-role-badge">Role</span>
-                                </div>
-                            </div>
-                            <button class="btn btn-logout" id="logout-btn">
-                                <i class="fas fa-sign-out-alt"></i>
-                                <span>Logout</span>
-                            </button>
                         </div>
                     </div>
                 </div>
@@ -88,6 +61,16 @@
                     <button class="nav-btn super-admin-only" data-section="users" style="display: none;">
                         <i class="fas fa-user-cog"></i> Users
                     </button>
+                <button class="nav-btn super-admin-only" data-section="damage-reports" style="display: none;">
+                    <i class="fas fa-exclamation-triangle"></i> Damage Reports
+                    <span class="notification-badge" id="damage-reports-badge" style="display: none;">0</span>
+                </button>
+                <button class="nav-btn super-admin-only" data-section="user-management" style="display: none;">
+                    <i class="fas fa-users-cog"></i> User Management
+                </button>
+                <button class="nav-btn" data-section="profile">
+                    <i class="fas fa-user-cog"></i> Profile
+                </button>
                 </nav>
             </div>
         </header>
@@ -99,7 +82,6 @@
                     <h2>Dashboard</h2>
                     <div class="dashboard-controls">
                         <select id="dashboard-type-filter">
-                            <option value="">All Types</option>
                         </select>
                     </div>
                 </div>
@@ -342,8 +324,332 @@
                 
                 <div id="users-list" class="users-grid"></div>
             </section>
-        </main>
-    </div>
+
+            <!-- Damage Reports Section (Super Admin only) -->
+            <section id="damage-reports" class="section">
+                <div class="section-header">
+                    <h2>Damage Reports</h2>
+                    <div class="damage-reports-stats">
+                        <span class="stat-badge">
+                            <i class="fas fa-exclamation-triangle"></i>
+                            <span id="total-damage-reports">0</span> Total Reports
+                        </span>
+                        <span class="stat-badge">
+                            <i class="fas fa-clock"></i>
+                            <span id="pending-damage-reports">0</span> Pending
+                        </span>
+                    </div>
+                </div>
+                
+                <div class="damage-reports-controls">
+                    <div class="filters-section">
+                        <div class="filter-group">
+                            <label for="damage-status-filter">Status</label>
+                            <select id="damage-status-filter">
+                                <option value="">All Status</option>
+                                <option value="pending">Pending</option>
+                                <option value="in_progress">In Progress</option>
+                                <option value="resolved">Resolved</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="damage-severity-filter">Severity</label>
+                            <select id="damage-severity-filter">
+                                <option value="">All Severity</option>
+                                <option value="minor">Minor</option>
+                                <option value="moderate">Moderate</option>
+                                <option value="severe">Severe</option>
+                                <option value="critical">Critical</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="search-section">
+                        <div class="search-box">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="damage-reports-search" placeholder="Search damage reports...">
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="damage-reports-list" class="damage-reports-grid"></div>
+        </section>
+
+            <!-- User Management Section (Super Admin only) -->
+            <section id="user-management" class="section">
+                <div class="section-header">
+                    <h2>User Management</h2>
+                    <p>Manage user accounts and reset passwords</p>
+                </div>
+
+                <div class="user-management-container">
+                    <div class="user-list">
+                        <h3>System Users</h3>
+                        <div id="user-list-content" class="user-list-content">
+                            <!-- Users will be loaded here -->
+                        </div>
+                    </div>
+                    
+                    <div class="password-reset-section">
+                        <h3>Password Reset</h3>
+                        <div class="password-reset-form">
+                            <div class="form-group">
+                                <label for="reset-user-select">Select User</label>
+                                <select id="reset-user-select">
+                                    <option value="">Choose a user...</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="new-password-reset">New Password</label>
+                                <input type="password" id="new-password-reset" placeholder="Enter new password">
+                            </div>
+                            <div class="form-group">
+                                <label for="confirm-password-reset">Confirm Password</label>
+                                <input type="password" id="confirm-password-reset" placeholder="Confirm new password">
+                            </div>
+                            <button class="btn btn-primary" onclick="app.resetUserPassword()">
+                                <i class="fas fa-key"></i> Reset Password
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Profile Section -->
+            <section id="profile" class="section">
+            <div class="section-header">
+                <h2>Profile Management</h2>
+                <p>Manage your account settings and credentials</p>
+            </div>
+
+            <div class="profile-container">
+            <div class="profile-card">
+                <div class="profile-header">
+                    <div class="profile-avatar">
+                        <i class="fas fa-user"></i>
+                    </div>
+                    <div class="profile-info">
+                        <h3 id="profile-name">Loading...</h3>
+                        <p id="profile-role">Loading...</p>
+                        <p id="profile-email">Loading...</p>
+                    </div>
+                    <div class="profile-logout">
+                        <button class="btn btn-danger" onclick="app.handleLogout()">
+                            <i class="fas fa-sign-out-alt"></i> Logout
+                        </button>
+                    </div>
+                </div>
+
+                <div class="profile-actions">
+                    <button class="btn btn-primary" onclick="app.showChangeUsernameForm()">
+                        <i class="fas fa-edit"></i> Change Username
+                    </button>
+                    <button class="btn btn-secondary" onclick="app.showChangePasswordForm()">
+                        <i class="fas fa-key"></i> Change Password
+                    </button>
+                    <button class="btn btn-info" onclick="app.showLoginHistory()">
+                        <i class="fas fa-history"></i> Login History
+                    </button>
+                    <button class="btn btn-success" onclick="app.exportData()">
+                        <i class="fas fa-download"></i> Export Data
+                    </button>
+                    <button class="btn btn-warning" onclick="app.showSystemSettings()">
+                        <i class="fas fa-cog"></i> System Settings
+                    </button>
+                    <button class="btn btn-dark" onclick="app.showActivityLog()">
+                        <i class="fas fa-list-alt"></i> Activity Log
+                    </button>
+                    <button class="btn btn-outline-primary" onclick="app.showSecuritySettings()">
+                        <i class="fas fa-shield-alt"></i> Security Settings
+                    </button>
+                </div>
+            </div>
+
+                <!-- Change Username Form -->
+                <div id="change-username-form" class="profile-form" style="display: none;">
+                    <div class="form-header">
+                        <h3>Change Username</h3>
+                        <button class="btn btn-close" onclick="app.hideChangeUsernameForm()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <form id="username-form">
+                        <div class="form-group">
+                            <label for="current-username">Current Username</label>
+                            <input type="text" id="current-username" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label for="new-username">New Username</label>
+                            <input type="text" id="new-username" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="confirm-username">Confirm New Username</label>
+                            <input type="text" id="confirm-username" required>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary" onclick="app.hideChangeUsernameForm()">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Update Username</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Change Password Form -->
+                <div id="change-password-form" class="profile-form" style="display: none;">
+                    <div class="form-header">
+                        <h3>Change Password</h3>
+                        <button class="btn btn-close" onclick="app.hideChangePasswordForm()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <form id="password-form">
+                        <div class="form-group">
+                            <label for="current-password">Current Password</label>
+                            <input type="password" id="current-password" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="new-password">New Password</label>
+                            <input type="password" id="new-password" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="confirm-password">Confirm New Password</label>
+                            <input type="password" id="confirm-password" required>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary" onclick="app.hideChangePasswordForm()">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Update Password</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Login History Form -->
+                <div id="login-history-form" class="profile-form" style="display: none;">
+                    <div class="form-header">
+                        <h3>Login History</h3>
+                        <button class="btn btn-close" onclick="app.hideLoginHistory()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="login-history-content">
+                        <div class="history-stats">
+                            <div class="stat-item">
+                                <i class="fas fa-sign-in-alt"></i>
+                                <span class="stat-number" id="total-logins">0</span>
+                                <span class="stat-label">Total Logins</span>
+                            </div>
+                            <div class="stat-item">
+                                <i class="fas fa-clock"></i>
+                                <span class="stat-number" id="last-login">Never</span>
+                                <span class="stat-label">Last Login</span>
+                            </div>
+                        </div>
+                        <div class="history-list" id="login-history-list">
+                            <p class="empty-state">No login history available</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- System Settings Form -->
+                <div id="system-settings-form" class="profile-form" style="display: none;">
+                    <div class="form-header">
+                        <h3>System Settings</h3>
+                        <button class="btn btn-close" onclick="app.hideSystemSettings()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <form id="system-settings-form-content">
+                        <div class="form-group">
+                            <label for="session-timeout">Session Timeout (minutes)</label>
+                            <input type="number" id="session-timeout" value="30" min="5" max="480">
+                        </div>
+                        <div class="form-group">
+                            <label for="backup-frequency">Backup Frequency</label>
+                            <select id="backup-frequency">
+                                <option value="daily">Daily</option>
+                                <option value="weekly">Weekly</option>
+                                <option value="monthly">Monthly</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="email-notifications">
+                                <input type="checkbox" id="email-notifications" checked>
+                                Enable Email Notifications
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label for="maintenance-mode">
+                                <input type="checkbox" id="maintenance-mode">
+                                Maintenance Mode
+                            </label>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary" onclick="app.hideSystemSettings()">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Save Settings</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Activity Log Form -->
+                <div id="activity-log-form" class="profile-form" style="display: none;">
+                    <div class="form-header">
+                        <h3>Activity Log</h3>
+                        <button class="btn btn-close" onclick="app.hideActivityLog()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <div class="activity-log-content">
+                        <div class="log-filters">
+                            <select id="activity-filter">
+                                <option value="all">All Activities</option>
+                                <option value="login">Login/Logout</option>
+                                <option value="data">Data Changes</option>
+                                <option value="system">System Events</option>
+                            </select>
+                            <input type="date" id="activity-date-filter" placeholder="Filter by date">
+                        </div>
+                        <div class="activity-list" id="activity-log-list">
+                            <p class="empty-state">No activity logs available</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Security Settings Form -->
+                <div id="security-settings-form" class="profile-form" style="display: none;">
+                    <div class="form-header">
+                        <h3>Security Settings</h3>
+                        <button class="btn btn-close" onclick="app.hideSecuritySettings()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <form id="security-settings-form-content">
+                        <div class="form-group">
+                            <label for="two-factor-auth">
+                                <input type="checkbox" id="two-factor-auth">
+                                Enable Two-Factor Authentication
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label for="password-expiry">Password Expiry (days)</label>
+                            <input type="number" id="password-expiry" value="90" min="30" max="365">
+                        </div>
+                        <div class="form-group">
+                            <label for="failed-login-limit">Failed Login Attempt Limit</label>
+                            <input type="number" id="failed-login-limit" value="5" min="3" max="10">
+                        </div>
+                        <div class="form-group">
+                            <label for="ip-restrictions">
+                                <input type="checkbox" id="ip-restrictions">
+                                Enable IP Restrictions
+                            </label>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-secondary" onclick="app.hideSecuritySettings()">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Save Security Settings</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </section>
+    </main>
+</div>
 
     <!-- Modals -->
     <div id="modal-overlay" class="modal-overlay">
@@ -363,5 +669,6 @@
     </div>
 
     <script src="app.js"></script>
+    
 </body>
 </html>

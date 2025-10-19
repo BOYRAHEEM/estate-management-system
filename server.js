@@ -126,6 +126,23 @@ async function initSchema() {
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             INDEX idx_users_username (username),
             INDEX idx_users_role (role)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
+        `CREATE TABLE IF NOT EXISTS damage_reports (
+            id VARCHAR(50) NOT NULL PRIMARY KEY,
+            item_id VARCHAR(50) NOT NULL,
+            damage_type VARCHAR(100) NOT NULL,
+            severity VARCHAR(50) NOT NULL,
+            description TEXT NOT NULL,
+            reported_by VARCHAR(255) NOT NULL,
+            damage_date DATE NULL,
+            estimated_cost DECIMAL(10,2) NULL,
+            repair_notes TEXT NULL,
+            status VARCHAR(50) DEFAULT 'pending',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            CONSTRAINT FK_damage_reports_item FOREIGN KEY (item_id) REFERENCES inventory_items (id) ON DELETE CASCADE ON UPDATE CASCADE,
+            INDEX idx_damage_reports_item_id (item_id),
+            INDEX idx_damage_reports_status (status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
     ];
     for (const stmt of ddlStatements) {
@@ -175,6 +192,8 @@ function requireAdminOrSuperAdmin(req, res, next) {
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     
+    console.log('Login attempt:', { username, password: password ? 'provided' : 'missing' });
+    
     if (!username || !password) {
         return res.status(400).json({ error: 'Username and password are required' });
     }
@@ -186,12 +205,19 @@ app.post('/api/login', async (req, res) => {
             [username]
         );
         
+        console.log('User found:', rows.length > 0 ? 'yes' : 'no');
+        if (rows.length > 0) {
+            console.log('User details:', { id: rows[0].id, username: rows[0].username, role: rows[0].role });
+        }
+        
         if (rows.length === 0) {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
         
         const user = rows[0];
         const isValidPassword = await bcrypt.compare(password, user.password_hash);
+        
+        console.log('Password valid:', isValidPassword);
         
         if (!isValidPassword) {
             return res.status(401).json({ error: 'Invalid credentials' });
@@ -666,8 +692,431 @@ app.delete('/api/users/:id', requireSuperAdmin, async (req, res) => {
     }
 });
 
+// Damage Reports
+app.post('/api/damage-reports', requireAuth, async (req, res) => {
+    console.log('Damage report request received:', req.body);
+    
+    const item_id = toNullableString(req.body.item_id);
+    const damage_type = toNullableString(req.body.damage_type);
+    const severity = toNullableString(req.body.severity);
+    const description = toNullableString(req.body.description);
+    const reported_by = toNullableString(req.body.reported_by);
+    const damage_date = toNullableString(req.body.damage_date);
+    const estimated_cost = req.body.estimated_cost ? parseFloat(req.body.estimated_cost) : null;
+    const repair_notes = toNullableString(req.body.repair_notes);
+    const id = uuidv4();
+    
+    console.log('Processed damage report data:', {
+        id, item_id, damage_type, severity, description, reported_by, damage_date, estimated_cost, repair_notes
+    });
+    
+    try {
+        const pool = await getPool();
+        
+        // Insert damage report
+        console.log('Inserting damage report into database...');
+        await pool.query(`INSERT INTO damage_reports (id, item_id, damage_type, severity, description, reported_by, damage_date, estimated_cost, repair_notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, 
+                    [id, item_id, damage_type, severity, description, reported_by, damage_date, estimated_cost, repair_notes]);
+        
+        // Update inventory item condition to 'damaged'
+        console.log('Updating inventory item condition...');
+        await pool.query(`UPDATE inventory_items SET \`condition\` = 'damaged' WHERE id = ?`, [item_id]);
+        
+        console.log('Damage report created successfully');
+        res.json({ 
+            message: 'Damage report submitted successfully', 
+            id,
+            item_id,
+            damage_type,
+            severity,
+            description,
+            reported_by,
+            damage_date,
+            estimated_cost,
+            repair_notes
+        });
+    } catch (err) {
+        console.error('Create damage report failed:', err);
+        console.error('Error details:', {
+            code: err.code,
+            errno: err.errno,
+            sqlState: err.sqlState,
+            sqlMessage: err.sqlMessage
+        });
+        res.status(500).json({ error: friendlySqlError(err) });
+    }
+});
+
+app.get('/api/damage-reports', requireAuth, async (req, res) => {
+    try {
+        const pool = await getPool();
+        const [rows] = await pool.query(`
+            SELECT dr.*, ii.name as item_name, ii.category, r.room_number, r.room_type, hu.name as housing_unit_name
+            FROM damage_reports dr
+            JOIN inventory_items ii ON dr.item_id = ii.id
+            JOIN rooms r ON ii.room_id = r.id
+            JOIN housing_units hu ON r.housing_unit_id = hu.id
+            ORDER BY dr.created_at DESC
+        `);
+        res.json(rows);
+    } catch (err) {
+        console.error('Get damage reports failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/api/damage-reports/:id', requireSuperAdmin, async (req, res) => {
+    const { status } = req.body;
+    const reportId = req.params.id;
+    
+    if (!status || !['pending', 'in_progress', 'resolved'].includes(status)) {
+        return res.status(400).json({ error: 'Invalid status. Must be pending, in_progress, or resolved' });
+    }
+    
+    try {
+        const pool = await getPool();
+        
+        // Update damage report status
+        await pool.query('UPDATE damage_reports SET status = ? WHERE id = ?', [status, reportId]);
+        
+        // Get the item_id from the damage report
+        const [reportRows] = await pool.query('SELECT item_id FROM damage_reports WHERE id = ?', [reportId]);
+        if (reportRows.length > 0) {
+            const itemId = reportRows[0].item_id;
+            
+            // Update inventory item condition based on status
+            let newCondition = 'damaged'; // default
+            if (status === 'resolved') {
+                newCondition = 'good'; // item is fixed
+            } else if (status === 'in_progress') {
+                newCondition = 'repairing'; // item is being repaired
+            }
+            
+            await pool.query('UPDATE inventory_items SET `condition` = ? WHERE id = ?', [newCondition, itemId]);
+        }
+        
+        res.json({ message: 'Damage report status updated successfully' });
+    } catch (err) {
+        console.error('Update damage report status failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Profile Management Endpoints
+app.get('/api/profile', requireAuth, async (req, res) => {
+    try {
+        console.log('Profile request - session user:', req.session.user);
+        const pool = await getPool();
+        const [rows] = await pool.query('SELECT id, username, role, email FROM users WHERE id = ?', [req.session.user.id]);
+        
+        if (rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        
+        res.json(rows[0]);
+    } catch (err) {
+        console.error('Get profile failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/api/profile/username', requireAuth, async (req, res) => {
+    console.log('Username update request - session user:', req.session.user);
+    console.log('Request body:', req.body);
+    
+    const { newUsername, confirmUsername } = req.body;
+    
+    if (!newUsername || !confirmUsername) {
+        return res.status(400).json({ error: 'New username and confirmation are required' });
+    }
+    
+    if (newUsername !== confirmUsername) {
+        return res.status(400).json({ error: 'Username confirmation does not match' });
+    }
+    
+    if (newUsername.length < 3) {
+        return res.status(400).json({ error: 'Username must be at least 3 characters long' });
+    }
+    
+    try {
+        const pool = await getPool();
+        
+        // Check if username already exists
+        const [existing] = await pool.query('SELECT id FROM users WHERE username = ? AND id != ?', [newUsername, req.session.user.id]);
+        if (existing.length > 0) {
+            return res.status(400).json({ error: 'Username already exists' });
+        }
+        
+        // Start transaction to ensure data integrity
+        await pool.query('START TRANSACTION');
+        
+        try {
+            // Update username
+            await pool.query('UPDATE users SET username = ? WHERE id = ?', [newUsername, req.session.user.id]);
+            
+            // Verify the update was successful
+            const [verifyRows] = await pool.query('SELECT username FROM users WHERE id = ?', [req.session.user.id]);
+            if (verifyRows.length === 0 || verifyRows[0].username !== newUsername) {
+                throw new Error('Username update verification failed');
+            }
+            
+            // Commit transaction
+            await pool.query('COMMIT');
+            
+            // Update session with new username
+            req.session.user.username = newUsername;
+            
+            res.json({ message: 'Username updated successfully', username: newUsername });
+        } catch (error) {
+            // Rollback transaction on error
+            await pool.query('ROLLBACK');
+            throw error;
+        }
+    } catch (err) {
+        console.error('Update username failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.put('/api/profile/password', requireAuth, async (req, res) => {
+    console.log('Password update request - session user:', req.session.user);
+    console.log('Request body:', req.body);
+    
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+    
+    console.log('Password fields:', { 
+        currentPassword: currentPassword ? 'provided' : 'missing', 
+        newPassword: newPassword ? 'provided' : 'missing', 
+        confirmPassword: confirmPassword ? 'provided' : 'missing' 
+    });
+    
+    if (!currentPassword || !newPassword || !confirmPassword) {
+        console.log('Missing password fields');
+        return res.status(400).json({ error: 'All password fields are required' });
+    }
+    
+    if (newPassword !== confirmPassword) {
+        console.log('Password confirmation does not match');
+        return res.status(400).json({ error: 'Password confirmation does not match' });
+    }
+    
+    if (newPassword.length < 6) {
+        console.log('Password too short:', newPassword.length);
+        return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+    }
+    
+    try {
+        const pool = await getPool();
+        
+        // Start transaction to ensure data integrity
+        await pool.query('START TRANSACTION');
+        
+        try {
+            // Get current user data
+            const [rows] = await pool.query('SELECT password_hash FROM users WHERE id = ?', [req.session.user.id]);
+            if (rows.length === 0) {
+                await pool.query('ROLLBACK');
+                return res.status(404).json({ error: 'User not found' });
+            }
+            
+            // Verify current password
+            const isValidPassword = await bcrypt.compare(currentPassword, rows[0].password_hash);
+            if (!isValidPassword) {
+                await pool.query('ROLLBACK');
+                return res.status(400).json({ error: 'Current password is incorrect' });
+            }
+            
+            // Hash new password
+            const hashedPassword = await bcrypt.hash(newPassword, 10);
+            
+            // Update password
+            await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hashedPassword, req.session.user.id]);
+            
+            // Verify the update was successful
+            const [verifyRows] = await pool.query('SELECT password_hash FROM users WHERE id = ?', [req.session.user.id]);
+            if (verifyRows.length === 0) {
+                throw new Error('Password update verification failed');
+            }
+            
+            // Test the new password hash
+            const testPassword = await bcrypt.compare(newPassword, verifyRows[0].password_hash);
+            if (!testPassword) {
+                throw new Error('New password hash verification failed');
+            }
+            
+            // Commit transaction
+            await pool.query('COMMIT');
+            
+            res.json({ message: 'Password updated successfully' });
+        } catch (error) {
+            // Rollback transaction on error
+            await pool.query('ROLLBACK');
+            throw error;
+        }
+    } catch (err) {
+        console.error('Update password failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Password recovery endpoint for super admins only
+app.post('/api/admin/reset-password', requireSuperAdmin, async (req, res) => {
+    const { targetUserId, newPassword } = req.body;
+    
+    if (!targetUserId || !newPassword) {
+        return res.status(400).json({ error: 'Target user ID and new password are required' });
+    }
+    
+    if (newPassword.length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+    }
+    
+    try {
+        const pool = await getPool();
+        
+        // Start transaction
+        await pool.query('START TRANSACTION');
+        
+        try {
+            // Check if target user exists
+            const [userRows] = await pool.query('SELECT id, username FROM users WHERE id = ?', [targetUserId]);
+            if (userRows.length === 0) {
+                await pool.query('ROLLBACK');
+                return res.status(404).json({ error: 'Target user not found' });
+            }
+            
+            // Hash new password
+            const hashedPassword = await bcrypt.hash(newPassword, 10);
+            
+            // Update password
+            await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hashedPassword, targetUserId]);
+            
+            // Verify the update
+            const [verifyRows] = await pool.query('SELECT password_hash FROM users WHERE id = ?', [targetUserId]);
+            if (verifyRows.length === 0) {
+                throw new Error('Password reset verification failed');
+            }
+            
+            // Test the new password hash
+            const testPassword = await bcrypt.compare(newPassword, verifyRows[0].password_hash);
+            if (!testPassword) {
+                throw new Error('New password hash verification failed');
+            }
+            
+            // Commit transaction
+            await pool.query('COMMIT');
+            
+            console.log(`Password reset for user ${userRows[0].username} by super admin ${req.session.user.username}`);
+            res.json({ message: 'Password reset successfully', username: userRows[0].username });
+        } catch (error) {
+            await pool.query('ROLLBACK');
+            throw error;
+        }
+    } catch (err) {
+        console.error('Password reset failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Delete user endpoint for super admins only
+app.delete('/api/admin/delete-user/:userId', requireSuperAdmin, async (req, res) => {
+    const { userId } = req.params;
+    
+    if (!userId) {
+        return res.status(400).json({ error: 'User ID is required' });
+    }
+    
+    try {
+        const pool = await getPool();
+        
+        // Start transaction
+        await pool.query('START TRANSACTION');
+        
+        try {
+            // Check if target user exists
+            const [userRows] = await pool.query('SELECT id, username, role FROM users WHERE id = ? OR username = ?', [userId, userId]);
+            if (userRows.length === 0) {
+                await pool.query('ROLLBACK');
+                return res.status(404).json({ error: 'User not found' });
+            }
+            
+            const targetUser = userRows[0];
+            
+            // Prevent deleting own account
+            if (targetUser.id === req.session.user.id || targetUser.username === req.session.user.username) {
+                await pool.query('ROLLBACK');
+                return res.status(400).json({ error: 'Cannot delete your own account' });
+            }
+            
+            // Prevent deleting the last super admin
+            if (targetUser.role === 'super_admin') {
+                const [superAdminRows] = await pool.query('SELECT COUNT(*) as count FROM users WHERE role = "super_admin"');
+                if (superAdminRows[0].count <= 1) {
+                    await pool.query('ROLLBACK');
+                    return res.status(400).json({ error: 'Cannot delete the last super admin account' });
+                }
+            }
+            
+            // Delete the user
+            await pool.query('DELETE FROM users WHERE id = ?', [targetUser.id]);
+            
+            // Commit transaction
+            await pool.query('COMMIT');
+            
+            console.log(`User ${targetUser.username} deleted by super admin ${req.session.user.username}`);
+            res.json({ message: 'User deleted successfully', username: targetUser.username });
+        } catch (error) {
+            await pool.query('ROLLBACK');
+            throw error;
+        }
+    } catch (err) {
+        console.error('User deletion failed:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Session check endpoint
+app.get('/api/session-check', (req, res) => {
+    if (req.session.user) {
+        res.json({ 
+            authenticated: true, 
+            user: req.session.user 
+        });
+    } else {
+        res.json({ authenticated: false });
+    }
+});
+
+// Clear session endpoint
+app.post('/api/clear-session', (req, res) => {
+    req.session.destroy((err) => {
+        if (err) {
+            res.status(500).json({ error: 'Could not clear session' });
+        } else {
+            res.json({ message: 'Session cleared' });
+        }
+    });
+});
+
+// Debug endpoint to check current usernames
+app.get('/api/debug/users', async (req, res) => {
+    try {
+        const pool = await getPool();
+        const [rows] = await pool.query('SELECT username, role FROM users WHERE role IN ("admin", "super_admin")');
+        res.json(rows);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // Serve the main page
 app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// Dashboard redirect route
+app.get('/dashboard', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 

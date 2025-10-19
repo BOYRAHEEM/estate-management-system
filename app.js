@@ -8,6 +8,7 @@ class EstateManagementApp {
         this.inventoryItems = [];
         this.employees = [];
         this.users = [];
+        this.damageReports = [];
         this.currentEditId = null;
         this.currentUser = null;
         this.isAuthenticated = false;
@@ -16,32 +17,55 @@ class EstateManagementApp {
     }
 
     async init() {
-        this.setupEventListeners();
-        
-        // Start with main app visible (assume authenticated until proven otherwise)
-        this.showMainApp();
-        
-        // Check if user is already authenticated
-        await this.checkAuthentication();
-        
-        if (this.isAuthenticated) {
-            await this.loadInitialData();
-            this.showSection('dashboard');
-            this.updateDashboard();
-        } else {
-            // Only show login page if authentication fails
+        try {
+            // Wait for DOM to be ready
+            if (document.readyState === 'loading') {
+                await new Promise(resolve => {
+                    document.addEventListener('DOMContentLoaded', resolve);
+                });
+            }
+            
+            // Setup event listeners safely
+            this.setupEventListeners();
+            
+            // Clear any existing sessions first
+            try {
+                await fetch('/api/clear-session', { method: 'POST' });
+            } catch (error) {
+                // No existing session to clear
+            }
+            
+            // Start with login page visible (assume not authenticated until proven otherwise)
             this.showLoginPage();
+            
+            // Check if user is already authenticated
+            await this.checkAuthentication();
+            
+            if (this.isAuthenticated) {
+                // Show main app only if authenticated
+                this.showMainApp();
+                await this.loadInitialData();
+                this.showSection('dashboard');
+                this.updateDashboard();
+            }
+        } catch (error) {
+            console.error('Error during app initialization:', error);
+            // Don't throw the error, just log it and continue
         }
     }
 
     setupEventListeners() {
-        // Login form
-        const loginForm = document.getElementById('login-form');
-        if (loginForm) {
-            loginForm.addEventListener('submit', (e) => {
-                e.preventDefault();
-                this.handleLogin();
-            });
+        try {
+            // Login form
+            const loginForm = document.getElementById('login-form');
+            if (loginForm) {
+                loginForm.addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    this.handleLogin();
+                });
+            }
+        } catch (error) {
+            console.error('Error setting up login form listener:', error);
         }
 
         // Logout button
@@ -49,6 +73,23 @@ class EstateManagementApp {
         if (logoutBtn) {
             logoutBtn.addEventListener('click', () => {
                 this.handleLogout();
+            });
+        }
+
+        // Profile form handlers
+        const usernameForm = document.getElementById('username-form');
+        if (usernameForm) {
+            usernameForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.updateUsername();
+            });
+        }
+
+        const passwordForm = document.getElementById('password-form');
+        if (passwordForm) {
+            passwordForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.updatePassword();
             });
         }
 
@@ -240,8 +281,23 @@ class EstateManagementApp {
     }
 
     async handleLogin() {
-        const username = document.getElementById('username').value;
-        const password = document.getElementById('password').value;
+        console.log('=== LOGIN ATTEMPT ===');
+        const usernameField = document.getElementById('username');
+        const passwordField = document.getElementById('password');
+        
+        console.log('Username field found:', !!usernameField);
+        console.log('Password field found:', !!passwordField);
+        
+        if (!usernameField || !passwordField) {
+            console.error('Login form fields not found!');
+            this.showNotification('Login form fields not found. Please refresh the page.', 'error');
+            return;
+        }
+        
+        const username = usernameField.value;
+        const password = passwordField.value;
+
+        console.log('Login attempt:', { username, password: password ? 'provided' : 'missing' });
 
         if (!username || !password) {
             this.showNotification('Please enter both username and password', 'error');
@@ -249,6 +305,7 @@ class EstateManagementApp {
         }
 
         try {
+            console.log('Sending login request...');
             const response = await fetch('/api/login', {
                 method: 'POST',
                 headers: {
@@ -258,8 +315,12 @@ class EstateManagementApp {
                 body: JSON.stringify({ username, password })
             });
 
+            console.log('Login response status:', response.status);
+            console.log('Login response ok:', response.ok);
+
             if (response.ok) {
                 const data = await response.json();
+                console.log('Login successful, user data:', data);
                 this.currentUser = data.user;
                 this.isAuthenticated = true;
                 this.updateUserInterface();
@@ -272,6 +333,7 @@ class EstateManagementApp {
                 this.updateDashboard();
             } else {
                 const errorData = await response.json();
+                console.log('Login failed, error data:', errorData);
                 this.showNotification(errorData.error || 'Login failed', 'error');
             }
         } catch (error) {
@@ -279,6 +341,7 @@ class EstateManagementApp {
             this.showNotification('Login failed. Please try again.', 'error');
         }
     }
+
 
     async handleLogout() {
         try {
@@ -298,20 +361,35 @@ class EstateManagementApp {
     }
 
     showLoginPage() {
+        // Show login page
         document.getElementById('login-page').classList.remove('hidden');
+        document.getElementById('login-page').style.display = 'block';
+        
+        // Hide app completely
         document.getElementById('app').classList.add('hidden');
+        document.getElementById('app').style.display = 'none';
+        document.getElementById('app').classList.remove('loaded');
     }
 
     showMainApp() {
         document.getElementById('login-page').classList.add('hidden');
-        document.getElementById('app').classList.remove('hidden');
+        // Force show the app by setting display style directly
+        document.getElementById('app').style.display = 'block';
+        document.getElementById('app').classList.add('loaded');
     }
 
     updateUserInterface() {
         if (this.currentUser) {
-            // Update user info in header
-            document.getElementById('user-name').textContent = this.currentUser.full_name;
-            document.getElementById('user-role-badge').textContent = this.currentUser.role.replace('_', ' ');
+            // Update user info in header (if elements exist)
+            const userNameElement = document.getElementById('user-name');
+            const userRoleElement = document.getElementById('user-role-badge');
+            
+            if (userNameElement) {
+                userNameElement.textContent = this.currentUser.full_name;
+            }
+            if (userRoleElement) {
+                userRoleElement.textContent = this.currentUser.role.replace('_', ' ');
+            }
             
             // Show/hide elements based on role
             const superAdminElements = document.querySelectorAll('.super-admin-only');
@@ -395,6 +473,11 @@ class EstateManagementApp {
             this.inventoryItems = inventoryItems;
             this.employees = employees;
 
+            // Load damage reports for super admins to update notification badge
+            if (this.currentUser && this.currentUser.role === 'super_admin') {
+                await this.loadDamageReports();
+            }
+
             this.populateHousingTypeFilter();
             this.populateRoomFilter();
             // populate dashboard type filter once we have types
@@ -476,7 +559,7 @@ class EstateManagementApp {
         return await response.json();
     }
 
-    showSection(sectionName) {
+    async showSection(sectionName) {
         // Update navigation
         document.querySelectorAll('.nav-btn').forEach(btn => {
             btn.classList.remove('active');
@@ -514,6 +597,21 @@ class EstateManagementApp {
                     return;
                 }
                 break;
+            case 'damage-reports':
+                if (this.currentUser && this.currentUser.role === 'super_admin') {
+                    this.loadDamageReports();
+                } else {
+                    this.showNotification('Access denied. Super Admin role required.', 'error');
+                    this.showSection('dashboard');
+                    return;
+                }
+                break;
+        case 'profile':
+            await this.loadProfile();
+            break;
+        case 'user-management':
+            await this.loadUserManagement();
+            break;
         }
     }
 
@@ -546,7 +644,7 @@ class EstateManagementApp {
             <div class="recent-item">
                 <div class="recent-info">
                     <h4>${unit.name}</h4>
-                    <p>${unit.type_name} • ${unit.address}</p>
+                    <p>${unit.type_name || 'Unknown Type'} • ${unit.address || 'No Address'}</p>
                 </div>
                 <span class="status-badge status-${unit.status}">${unit.status}</span>
             </div>
@@ -555,38 +653,105 @@ class EstateManagementApp {
 
     renderHousingChart() {
         const container = document.getElementById('housing-chart');
-        const typeCounts = {};
-        const typeFilter = document.getElementById('dashboard-type-filter');
-        const selectedTypeId = typeFilter ? typeFilter.value : '';
         
-        this.housingUnits.forEach(unit => {
-            if (!selectedTypeId || unit.type_id === selectedTypeId) {
-                typeCounts[unit.type_name] = (typeCounts[unit.type_name] || 0) + 1;
+        // Calculate room occupancy statistics
+        const roomStats = {
+            total: this.rooms.length,
+            occupied: 0,
+            available: 0,
+            maintenance: 0
+        };
+        
+        // Count rooms by status
+        this.rooms.forEach(room => {
+            if (room.status === 'occupied') {
+                roomStats.occupied++;
+            } else if (room.status === 'available') {
+                roomStats.available++;
+            } else if (room.status === 'maintenance') {
+                roomStats.maintenance++;
             }
         });
 
-        if (Object.keys(typeCounts).length === 0) {
-            container.innerHTML = '<div class="empty-state"><i class="fas fa-chart-pie"></i><h3>No data available</h3><p>Add housing units to see distribution</p></div>';
+        if (roomStats.total === 0) {
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-home"></i><h3>No room data</h3><p>Add rooms to see occupancy statistics</p></div>';
             return;
         }
 
-        const entries = Object.entries(typeCounts);
-        const max = Math.max(...entries.map(([, c]) => c));
-        const bars = entries.map(([type, count]) => {
-            const heightPct = max === 0 ? 0 : Math.round((count / max) * 100);
-            return `<div class="bar" title="${type}: ${count}" data-count="${count}" style="height:${heightPct}%;"></div>`;
+        // Calculate percentages
+        const occupiedPct = Math.round((roomStats.occupied / roomStats.total) * 100);
+        const availablePct = Math.round((roomStats.available / roomStats.total) * 100);
+        const maintenancePct = Math.round((roomStats.maintenance / roomStats.total) * 100);
+
+        // Define status colors and labels
+        const statusConfig = {
+            'occupied': { color: '#e74c3c', label: 'Occupied', icon: 'fas fa-user' },
+            'available': { color: '#27ae60', label: 'Available', icon: 'fas fa-check' },
+            'maintenance': { color: '#f39c12', label: 'Maintenance', icon: 'fas fa-tools' }
+        };
+
+        const statusData = [
+            { status: 'occupied', count: roomStats.occupied, percentage: occupiedPct },
+            { status: 'available', count: roomStats.available, percentage: availablePct },
+            { status: 'maintenance', count: roomStats.maintenance, percentage: maintenancePct }
+        ].filter(item => item.count > 0);
+
+        const max = Math.max(...statusData.map(item => item.count));
+        const bars = statusData.map(item => {
+            const heightPct = max === 0 ? 0 : Math.round((item.count / max) * 100);
+            const config = statusConfig[item.status];
+            return `<div class="bar" title="${config.label}: ${item.count} (${item.percentage}%)" data-count="${item.count}" style="height:${heightPct}%; background-color:${config.color};"></div>`;
         }).join('');
-        const labels = entries.map(([type]) => `<span title="${type}">${type.split(' ').map(w=>w[0]).join('').slice(0,4).toUpperCase()}</span>`).join('');
-        container.innerHTML = `<div class="bar-chart">${bars}</div><div class="bar-labels">${labels}</div>`;
+        
+        const labels = statusData.map(item => {
+            const config = statusConfig[item.status];
+            return `<span title="${config.label}: ${item.count}">${config.label.slice(0,4).toUpperCase()}</span>`;
+        }).join('');
+        
+        container.innerHTML = `
+            <div class="chart-header">
+                <h4>Room Occupancy Status</h4>
+                <p>Current room availability and occupancy rates</p>
+            </div>
+            <div class="bar-chart">${bars}</div>
+            <div class="bar-labels">${labels}</div>
+            <div class="chart-stats">
+                <div class="stat-item">
+                    <i class="fas fa-home"></i>
+                    <span class="stat-number">${roomStats.total}</span>
+                    <span class="stat-label">Total Rooms</span>
+                </div>
+                <div class="stat-item">
+                    <i class="fas fa-user" style="color: #e74c3c;"></i>
+                    <span class="stat-number">${roomStats.occupied}</span>
+                    <span class="stat-label">Occupied</span>
+                </div>
+                <div class="stat-item">
+                    <i class="fas fa-check" style="color: #27ae60;"></i>
+                    <span class="stat-number">${roomStats.available}</span>
+                    <span class="stat-label">Available</span>
+                </div>
+                <div class="stat-item">
+                    <i class="fas fa-tools" style="color: #f39c12;"></i>
+                    <span class="stat-number">${roomStats.maintenance}</span>
+                    <span class="stat-label">Maintenance</span>
+                </div>
+            </div>
+        `;
     }
 
     populateDashboardTypeFilter() {
         const typeFilter = document.getElementById('dashboard-type-filter');
         if (!typeFilter) return;
-        const options = this.housingTypes.map(t => `
-            <option value="${t.id}">${t.name}</option>
-        `).join('');
-        typeFilter.innerHTML = '<option value="">All Types</option>' + options;
+        const options = `
+            <option value="excellent">Excellent</option>
+            <option value="good">Good</option>
+            <option value="fair">Fair</option>
+            <option value="poor">Poor</option>
+            <option value="damaged">Damaged</option>
+            <option value="repairing">Repairing</option>
+        `;
+        typeFilter.innerHTML = options;
     }
 
 
@@ -648,7 +813,7 @@ class EstateManagementApp {
         const bedrooms = unitRooms.map(room => {
             const occupant = this.employees.find(emp => emp.assigned_room_id === room.id);
             return {
-                name: room.name,
+                name: `Room ${room.room_number || 'N/A'} (${room.room_type || 'Unknown Type'})`,
                 occupant: occupant ? occupant.name : null,
                 status: occupant ? 'occupied' : 'vacant'
             };
@@ -658,13 +823,13 @@ class EstateManagementApp {
             <div class="housing-card">
                 <div class="housing-header">
                     <h3 class="housing-title">${unit.name}</h3>
-                    <span class="housing-type-badge">${unit.type_name}</span>
+                    <span class="housing-type-badge">${unit.type_name || 'Unknown Type'}</span>
                 </div>
                 
                 <div class="housing-details">
                     <div class="housing-detail-item">
                         <span class="housing-detail-label">Housing Type</span>
-                        <span class="housing-detail-value">${unit.type_name}</span>
+                        <span class="housing-detail-value">${unit.type_name || 'Unknown Type'}</span>
                     </div>
                     <div class="housing-detail-item">
                         <span class="housing-detail-label">Occupancy</span>
@@ -716,7 +881,7 @@ class EstateManagementApp {
         const searchTerm = document.getElementById('housing-search')?.value?.toLowerCase() || '';
 
         return this.housingUnits.filter(unit => {
-            const matchesType = !typeFilter || unit.type_name === typeFilter;
+            const matchesType = !typeFilter || (unit.type_name || 'Unknown Type') === typeFilter;
             
             // Calculate occupancy for this unit
             const unitRooms = this.rooms.filter(room => room.housing_unit_id === unit.id);
@@ -729,7 +894,7 @@ class EstateManagementApp {
             
             const matchesSearch = !searchTerm || 
                 unit.name.toLowerCase().includes(searchTerm) ||
-                unit.type_name.toLowerCase().includes(searchTerm);
+                (unit.type_name || 'Unknown Type').toLowerCase().includes(searchTerm);
 
             return matchesType && matchesOccupancy && matchesSearch;
         });
@@ -852,7 +1017,7 @@ class EstateManagementApp {
                 <div>
                     <div style="font-weight:600; color:#2c3e50;">${e.name}</div>
                     <div style="font-size:12px; color:#7f8c8d;">${e.employee_id} • ${e.department}</div>
-                    <div style="font-size:12px; color:#516173; margin-top:2px;">${e.assigned_room_id ? `${e.housing_unit_name} - Room ${e.room_number} (${e.room_type})` : 'No room assigned'}</div>
+                    <div style="font-size:12px; color:#516173; margin-top:2px;">${e.assigned_room_id ? `${e.housing_unit_name || 'Unknown Unit'} - Room ${e.room_number || 'N/A'} (${e.room_type || 'Unknown Type'})` : 'No room assigned'}</div>
                 </div>
                 <span class="status-badge status-${e.status}">${e.status}</span>
             </div>
@@ -897,7 +1062,7 @@ class EstateManagementApp {
                     <div class="card-item"><span class="card-label">Department:</span><span class="card-value">${employee.department}</span></div>
                     <div class="card-item"><span class="card-label">Position:</span><span class="card-value">${employee.position}</span></div>
                     <div class="card-item"><span class="card-label">Status:</span><span class="card-value"><span class="status-badge status-${employee.status}">${employee.status}</span></span></div>
-                    <div class="card-item"><span class="card-label">Assigned Room:</span><span class="card-value">${employee.assigned_room_id ? `${employee.housing_unit_name} - Room ${employee.room_number} (${employee.room_type})` : 'No room assigned'}</span></div>
+                    <div class="card-item"><span class="card-label">Assigned Room:</span><span class="card-value">${employee.assigned_room_id ? `${employee.housing_unit_name || 'Unknown Unit'} - Room ${employee.room_number || 'N/A'} (${employee.room_type || 'Unknown Type'})` : 'No room assigned'}</span></div>
                     ${employee.email ? `<div class="card-item"><span class="card-label">Email:</span><span class="card-value">${employee.email}</span></div>` : ''}
                     ${employee.phone ? `<div class="card-item"><span class="card-label">Phone:</span><span class="card-value">${employee.phone}</span></div>` : ''}
                 </div>
@@ -1013,7 +1178,7 @@ class EstateManagementApp {
                         <option value="">Select room</option>
                         ${this.rooms.map(room => `
                             <option value="${room.id}" ${item?.room_id === room.id ? 'selected' : ''}>
-                                ${room.housing_unit_name} - Room ${room.room_number} (${room.room_type})
+                                ${room.housing_unit_name || 'Unknown Unit'} - Room ${room.room_number || 'N/A'} (${room.room_type || 'Unknown Type'})
                             </option>
                         `).join('')}
                     </select>
@@ -1122,7 +1287,7 @@ class EstateManagementApp {
                         <option value="">No room assigned</option>
                         ${this.rooms.map(room => `
                             <option value="${room.id}" ${employee?.assigned_room_id === room.id ? 'selected' : ''}>
-                                ${room.housing_unit_name} - Room ${room.room_number} (${room.room_type})
+                                ${room.housing_unit_name || 'Unknown Unit'} - Room ${room.room_number || 'N/A'} (${room.room_type || 'Unknown Type'})
                             </option>
                         `).join('')}
                     </select>
@@ -1345,8 +1510,8 @@ class EstateManagementApp {
 
             const rowsHtml = rooms.map(room => `
                 <tr>
-                    <td>${room.room_number}</td>
-                    <td>${room.room_type}</td>
+                    <td>${room.room_number || 'N/A'}</td>
+                    <td>${room.room_type || 'Unknown Type'}</td>
                     <td>${room.capacity}</td>
                     <td><span class="status-badge status-${room.status}">${room.status}</span></td>
                     <td>
@@ -1521,7 +1686,7 @@ class EstateManagementApp {
     populateRoomFilter() {
         const roomFilter = document.getElementById('room-filter');
         const rooms = this.rooms.map(room => `
-            <option value="${room.id}">${room.housing_unit_name} - Room ${room.room_number}</option>
+            <option value="${room.id}">${room.housing_unit_name || 'Unknown Unit'} - Room ${room.room_number || 'N/A'}</option>
         `).join('');
         
         roomFilter.innerHTML = '<option value="">All Rooms</option>' + rooms;
@@ -1539,8 +1704,8 @@ class EstateManagementApp {
     filterHousing(searchTerm) {
         const filtered = this.housingUnits.filter(unit => 
             unit.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            unit.address.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            unit.type_name.toLowerCase().includes(searchTerm.toLowerCase())
+            (unit.address || 'No Address').toLowerCase().includes(searchTerm.toLowerCase()) ||
+            (unit.type_name || 'Unknown Type').toLowerCase().includes(searchTerm.toLowerCase())
         );
         this.renderFilteredHousing(filtered);
     }
@@ -1582,11 +1747,11 @@ class EstateManagementApp {
                 <div class="card-content">
                     <div class="card-item">
                         <span class="card-label">Type:</span>
-                        <span class="card-value">${unit.type_name}</span>
+                        <span class="card-value">${unit.type_name || 'Unknown Type'}</span>
                     </div>
                     <div class="card-item">
                         <span class="card-label">Address:</span>
-                        <span class="card-value">${unit.address}</span>
+                        <span class="card-value">${unit.address || 'No Address'}</span>
                     </div>
                     <div class="card-item">
                         <span class="card-label">Capacity:</span>
@@ -1652,6 +1817,17 @@ class EstateManagementApp {
                 <div class="card-header">
                     <h3 class="card-title">${item.name}</h3>
                     <div class="card-actions">
+                        ${this.currentUser && this.currentUser.role === 'super_admin' ? '' : `
+                        ${item.condition === 'damaged' || item.condition === 'repairing' ? '' : `
+                        <button class="btn btn-soft-danger btn-sm" onclick="app.reportDamage('${item.id}')"><i class="fas fa-exclamation-triangle"></i> Report Damage</button>
+                        `}
+                        `}
+                        ${item.condition === 'repairing' ? `
+                        <span class="status-badge status-repairing"><i class="fas fa-tools"></i> Under Repair</span>
+                        ` : ''}
+                        ${item.condition === 'damaged' ? `
+                        <span class="status-badge status-damaged"><i class="fas fa-exclamation-triangle"></i> Damage Reported</span>
+                        ` : ''}
                         ${this.currentUser && this.currentUser.role === 'super_admin' ? `
                         <button class="btn btn-secondary" onclick="app.editInventory('${item.id}')">
                             <i class="fas fa-edit"></i> Edit
@@ -1675,11 +1851,12 @@ class EstateManagementApp {
                         <span class="card-label">Condition:</span>
                         <span class="card-value">
                             <span class="status-badge status-${item.condition}">${item.condition}</span>
+                            ${this.isRecentlyRepaired(item) ? '<span class="recently-repaired-indicator">Recently Repaired</span>' : ''}
                         </span>
                     </div>
                     <div class="card-item">
                         <span class="card-label">Location:</span>
-                        <span class="card-value">${item.housing_unit_name} - Room ${item.room_number}</span>
+                        <span class="card-value">${item.housing_unit_name || 'Unknown Unit'} - Room ${item.room_number || 'N/A'}</span>
                     </div>
                     ${item.description ? `
                     <div class="card-item">
@@ -1725,7 +1902,17 @@ class EstateManagementApp {
                         <div class="card-header">
                             <h3 class="card-title">${item.name}</h3>
                             <div class="card-actions">
+                                ${this.currentUser && this.currentUser.role === 'super_admin' ? '' : `
+                                ${item.condition === 'damaged' || item.condition === 'repairing' ? '' : `
                                 <button class="btn btn-soft-danger btn-sm" onclick="app.reportDamage('${item.id}')"><i class="fas fa-exclamation-triangle"></i> Report Damage</button>
+                                `}
+                                `}
+                                ${item.condition === 'repairing' ? `
+                                <span class="status-badge status-repairing"><i class="fas fa-tools"></i> Under Repair</span>
+                                ` : ''}
+                                ${item.condition === 'damaged' ? `
+                                <span class="status-badge status-damaged"><i class="fas fa-exclamation-triangle"></i> Damage Reported</span>
+                                ` : ''}
                                 ${this.currentUser && this.currentUser.role === 'super_admin' ? `
                                 <button class="btn btn-secondary" onclick="app.editInventory('${item.id}')"><i class="fas fa-edit"></i> Edit</button>
                                 <button class="btn btn-danger" onclick="app.deleteInventory('${item.id}')"><i class="fas fa-trash"></i> Delete</button>
@@ -1735,7 +1922,7 @@ class EstateManagementApp {
                         <div class="card-content">
                             <div class="card-item"><span class="card-label">Category:</span><span class="card-value">${item.category}</span></div>
                             <div class="card-item"><span class="card-label">Quantity:</span><span class="card-value">${item.quantity} ${item.unit || 'pcs'}</span></div>
-                            <div class="card-item"><span class="card-label">Condition:</span><span class="card-value"><span class="status-badge status-${item.condition}">${item.condition}</span></span></div>
+                            <div class="card-item"><span class="card-label">Condition:</span><span class="card-value"><span class="status-badge status-${item.condition}">${item.condition}</span>${this.isRecentlyRepaired(item) ? '<span class="recently-repaired-indicator">Recently Repaired</span>' : ''}</span></div>
                             ${item.description ? `<div class="card-item"><span class="card-label">Description:</span><span class="card-value">${item.description}</span></div>` : ''}
                         </div>
                     </div>
@@ -1743,7 +1930,7 @@ class EstateManagementApp {
             return `
                 <div class="room-group">
                     <div class="room-group-header">
-                        <h4>${room.housing_unit_name} - Room ${room.room_number} (${room.room_type})</h4>
+                        <h4>${room.housing_unit_name || 'Unknown Unit'} - Room ${room.room_number || 'N/A'} (${room.room_type || 'Unknown Type'})</h4>
                         <div>
                             <button class="btn btn-soft-success btn-sm btn-pill" onclick="app.addInventoryForRoom('${room.id}')"><i class="fas fa-plus"></i><span>Add item</span></button>
                         </div>
@@ -1806,12 +1993,12 @@ class EstateManagementApp {
                 
                 <div class="form-group">
                     <label for="reported-by">Reported By *</label>
-                    <input type="text" id="reported-by" placeholder="Your name" required>
+                    <input type="text" id="reported-by" placeholder="Your name" required readonly>
                 </div>
                 
                 <div class="form-group">
-                    <label for="damage-date">Date of Damage</label>
-                    <input type="date" id="damage-date">
+                    <label for="damage-date">Date of Damage *</label>
+                    <input type="date" id="damage-date" required>
                 </div>
                 
                 <div class="form-group">
@@ -1827,6 +2014,19 @@ class EstateManagementApp {
         `;
         
         this.showModal(title, content);
+        
+        // Auto-populate the reported by field with current user's name
+        const reportedByField = document.getElementById('reported-by');
+        if (reportedByField && this.currentUser) {
+            reportedByField.value = this.currentUser.full_name || this.currentUser.username;
+        }
+        
+        // Set default date to today
+        const damageDateField = document.getElementById('damage-date');
+        if (damageDateField) {
+            const today = new Date().toISOString().split('T')[0];
+            damageDateField.value = today;
+        }
         
         document.getElementById('modal-save').onclick = () => {
             this.submitDamageReport(itemId);
@@ -1847,20 +2047,16 @@ class EstateManagementApp {
         };
 
         // Validate required fields
-        if (!formData.damage_type || !formData.severity || !formData.description || !formData.reported_by) {
+        if (!formData.damage_type || !formData.severity || !formData.description || !formData.reported_by || !formData.damage_date) {
             this.showNotification('Please fill in all required fields', 'error');
             return;
         }
 
         try {
-            // Update the item condition to 'damaged' and add damage report
-            await this.putData(`/api/inventory/${itemId}`, {
-                condition: 'damaged',
-                description: formData.description
-            });
-            
-            // Store damage report (you might want to create a separate API endpoint for this)
-            console.log('Damage Report:', formData);
+            console.log('Submitting damage report:', formData);
+            // Submit damage report using the new API endpoint
+            const response = await this.postData('/api/damage-reports', formData);
+            console.log('Damage report response:', response);
             
             this.showNotification('Damage report submitted successfully', 'success');
             this.closeModal();
@@ -1869,9 +2065,19 @@ class EstateManagementApp {
             await this.loadInitialData();
             this.renderInventoryItems();
             this.updateDashboard();
+            
+            // Update damage reports notification if user is super admin
+            if (this.currentUser && this.currentUser.role === 'super_admin') {
+                await this.loadDamageReports();
+            }
         } catch (error) {
             console.error('Error submitting damage report:', error);
-            this.showNotification('Error submitting damage report', 'error');
+            console.error('Error details:', {
+                message: error.message,
+                status: error.status,
+                response: error.response
+            });
+            this.showNotification(`Error submitting damage report: ${error.message}`, 'error');
         }
     }
 
@@ -2128,9 +2334,611 @@ class EstateManagementApp {
             }
         }
     }
+
+    // Damage Reports Management (Super Admin only)
+    async loadDamageReports() {
+        try {
+            this.damageReports = await this.fetchData('/api/damage-reports');
+            this.renderDamageReports();
+            this.updateDamageReportsStats();
+            this.updateDamageReportsNotification();
+        } catch (error) {
+            console.error('Error loading damage reports:', error);
+            this.showNotification('Error loading damage reports', 'error');
+        }
+    }
+
+    renderDamageReports() {
+        const container = document.getElementById('damage-reports-list');
+        
+        if (this.damageReports.length === 0) {
+            container.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><h3>No damage reports</h3><p>All items are in good condition</p></div>';
+            return;
+        }
+
+        container.innerHTML = this.damageReports.map(report => this.renderDamageReportCard(report)).join('');
+    }
+
+    renderDamageReportCard(report) {
+        const createdDate = new Date(report.created_at).toLocaleDateString();
+        const damageDate = report.damage_date ? new Date(report.damage_date).toLocaleDateString() : 'Not specified';
+        const estimatedCost = report.estimated_cost ? `$${parseFloat(report.estimated_cost).toFixed(2)}` : 'Not specified';
+
+        return `
+            <div class="damage-report-card ${report.severity}">
+                <div class="damage-report-header">
+                    <h3 class="damage-report-title">${report.item_name}</h3>
+                    <div class="damage-report-meta">
+                        <span class="damage-report-status ${report.status}">${report.status.replace('_', ' ')}</span>
+                        <span class="damage-report-severity ${report.severity}">${report.severity}</span>
+                    </div>
+                </div>
+                
+                <div class="damage-report-content">
+                    <p class="damage-report-description">${report.description}</p>
+                    
+                    <div class="damage-report-details">
+                        <div class="damage-report-detail">
+                            <span class="damage-report-detail-label">Reported By</span>
+                            <span class="damage-report-detail-value">${report.reported_by}</span>
+                        </div>
+                        <div class="damage-report-detail">
+                            <span class="damage-report-detail-label">Damage Type</span>
+                            <span class="damage-report-detail-value">${report.damage_type}</span>
+                        </div>
+                        <div class="damage-report-detail">
+                            <span class="damage-report-detail-label">Location</span>
+                            <span class="damage-report-detail-value">${report.housing_unit_name || 'Unknown Unit'} - Room ${report.room_number || 'N/A'}</span>
+                        </div>
+                        <div class="damage-report-detail">
+                            <span class="damage-report-detail-label">Damage Date</span>
+                            <span class="damage-report-detail-value">${damageDate}</span>
+                        </div>
+                        <div class="damage-report-detail">
+                            <span class="damage-report-detail-label">Estimated Cost</span>
+                            <span class="damage-report-detail-value">${estimatedCost}</span>
+                        </div>
+                        <div class="damage-report-detail">
+                            <span class="damage-report-detail-label">Reported On</span>
+                            <span class="damage-report-detail-value">${createdDate}</span>
+                        </div>
+                    </div>
+                    
+                    ${report.repair_notes ? `
+                    <div class="damage-report-detail">
+                        <span class="damage-report-detail-label">Repair Notes</span>
+                        <span class="damage-report-detail-value">${report.repair_notes}</span>
+                    </div>
+                    ` : ''}
+                </div>
+                
+                <div class="damage-report-actions">
+                    ${report.status === 'pending' ? `
+                    <button class="btn btn-secondary" onclick="app.updateDamageReportStatus('${report.id}', 'in_progress')">
+                        <i class="fas fa-play"></i> Start Repair
+                    </button>
+                    <button class="btn btn-success" onclick="app.updateDamageReportStatus('${report.id}', 'resolved')">
+                        <i class="fas fa-check"></i> Mark Resolved
+                    </button>
+                    ` : ''}
+                    ${report.status === 'in_progress' ? `
+                    <button class="btn btn-success" onclick="app.updateDamageReportStatus('${report.id}', 'resolved')">
+                        <i class="fas fa-check"></i> Mark Resolved
+                    </button>
+                    <button class="btn btn-secondary" disabled>
+                        <i class="fas fa-tools"></i> Repair In Progress
+                    </button>
+                    ` : ''}
+                    ${report.status === 'resolved' ? `
+                    <button class="btn btn-success" disabled>
+                        <i class="fas fa-check-circle"></i> Resolved
+                    </button>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    updateDamageReportsStats() {
+        const totalReports = document.getElementById('total-damage-reports');
+        const pendingReports = document.getElementById('pending-damage-reports');
+        
+        if (totalReports) {
+            totalReports.textContent = this.damageReports.length;
+        }
+        if (pendingReports) {
+            const pendingCount = this.damageReports.filter(report => report.status === 'pending').length;
+            pendingReports.textContent = pendingCount;
+        }
+    }
+
+    updateDamageReportsNotification() {
+        const badge = document.getElementById('damage-reports-badge');
+        if (badge) {
+            const pendingCount = this.damageReports.filter(report => report.status === 'pending').length;
+            if (pendingCount > 0) {
+                badge.textContent = pendingCount;
+                badge.style.display = 'flex';
+            } else {
+                badge.style.display = 'none';
+            }
+        }
+    }
+
+    async updateDamageReportStatus(reportId, newStatus) {
+        try {
+            await this.putData(`/api/damage-reports/${reportId}`, { status: newStatus });
+            this.showNotification(`Damage report ${newStatus.replace('_', ' ')} successfully`, 'success');
+            
+            // Refresh damage reports
+            await this.loadDamageReports();
+            
+            // Refresh inventory to show updated item conditions
+            await this.loadInitialData();
+            this.renderInventoryItems();
+            this.updateDashboard();
+        } catch (error) {
+            console.error('Error updating damage report status:', error);
+            this.showNotification('Error updating damage report status', 'error');
+        }
+    }
+
+    // Check if an item was recently repaired (within 2 days)
+    isRecentlyRepaired(item) {
+        if (item.condition !== 'good') return false;
+        
+        // Find the most recent damage report for this item that was resolved
+        const recentReport = this.damageReports.find(report => 
+            report.item_id === item.id && 
+            report.status === 'resolved'
+        );
+        
+        if (!recentReport) return false;
+        
+        // Check if the report was resolved within the last 2 days
+        const resolvedDate = new Date(recentReport.updated_at);
+        const twoDaysAgo = new Date();
+        twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+        
+        return resolvedDate >= twoDaysAgo;
+    }
+
+    // Profile Management Methods
+    async loadProfile() {
+        try {
+            const profile = await this.fetchData('/api/profile');
+            this.renderProfile(profile);
+        } catch (error) {
+            console.error('Error loading profile:', error);
+            this.showNotification('Error loading profile', 'error');
+        }
+    }
+
+    renderProfile(profile) {
+        document.getElementById('profile-name').textContent = profile.username;
+        document.getElementById('profile-role').textContent = profile.role.replace('_', ' ').toUpperCase();
+        document.getElementById('profile-email').textContent = profile.email || 'No email provided';
+        document.getElementById('current-username').value = profile.username;
+        
+        // Update the user info in the header if it exists
+        const userNameElement = document.getElementById('user-name');
+        const userRoleElement = document.getElementById('user-role-badge');
+        if (userNameElement) {
+            userNameElement.textContent = profile.username;
+        }
+        if (userRoleElement) {
+            userRoleElement.textContent = profile.role.replace('_', ' ').toUpperCase();
+        }
+    }
+
+    showChangeUsernameForm() {
+        document.getElementById('change-username-form').style.display = 'block';
+        document.getElementById('change-password-form').style.display = 'none';
+    }
+
+    hideChangeUsernameForm() {
+        document.getElementById('change-username-form').style.display = 'none';
+        document.getElementById('username-form').reset();
+    }
+
+    showChangePasswordForm() {
+        document.getElementById('change-password-form').style.display = 'block';
+        document.getElementById('change-username-form').style.display = 'none';
+    }
+
+    hideChangePasswordForm() {
+        document.getElementById('change-password-form').style.display = 'none';
+        document.getElementById('password-form').reset();
+    }
+
+    async updateUsername() {
+        const newUsername = document.getElementById('new-username').value;
+        const confirmUsername = document.getElementById('confirm-username').value;
+
+        console.log('Frontend - newUsername:', newUsername);
+        console.log('Frontend - confirmUsername:', confirmUsername);
+
+        if (newUsername !== confirmUsername) {
+            this.showNotification('Username confirmation does not match', 'error');
+            return;
+        }
+
+        try {
+            const requestData = {
+                newUsername,
+                confirmUsername
+            };
+            console.log('Frontend - sending data:', requestData);
+            
+            await this.putData('/api/profile/username', requestData);
+            
+            this.showNotification('Username updated successfully', 'success');
+            this.hideChangeUsernameForm();
+            await this.loadProfile();
+        } catch (error) {
+            console.error('Error updating username:', error);
+            this.showNotification(`Error updating username: ${error.message}`, 'error');
+        }
+    }
+
+    async updatePassword() {
+        const currentPassword = document.getElementById('current-password').value;
+        const newPassword = document.getElementById('new-password').value;
+        const confirmPassword = document.getElementById('confirm-password').value;
+
+        console.log('Frontend - currentPassword:', currentPassword ? 'provided' : 'missing');
+        console.log('Frontend - newPassword:', newPassword ? 'provided' : 'missing');
+        console.log('Frontend - confirmPassword:', confirmPassword ? 'provided' : 'missing');
+
+        if (newPassword !== confirmPassword) {
+            this.showNotification('Password confirmation does not match', 'error');
+            return;
+        }
+
+        try {
+            const requestData = {
+                currentPassword,
+                newPassword,
+                confirmPassword
+            };
+            console.log('Frontend - sending password data:', requestData);
+            
+            await this.putData('/api/profile/password', requestData);
+            
+            this.showNotification('Password updated successfully', 'success');
+            this.hideChangePasswordForm();
+        } catch (error) {
+            console.error('Error updating password:', error);
+            this.showNotification(`Error updating password: ${error.message}`, 'error');
+        }
+    }
+
+    // New Profile Options Methods
+    showLoginHistory() {
+        document.getElementById('login-history-form').style.display = 'block';
+        this.loadLoginHistory();
+    }
+
+    hideLoginHistory() {
+        document.getElementById('login-history-form').style.display = 'none';
+    }
+
+    loadLoginHistory() {
+        // Simulate login history data
+        const loginHistory = [
+            { date: '2024-01-15 10:30:00', ip: '192.168.1.100', status: 'Success' },
+            { date: '2024-01-14 09:15:00', ip: '192.168.1.100', status: 'Success' },
+            { date: '2024-01-13 14:45:00', ip: '192.168.1.100', status: 'Success' },
+            { date: '2024-01-12 11:20:00', ip: '192.168.1.100', status: 'Failed' }
+        ];
+
+        document.getElementById('total-logins').textContent = loginHistory.filter(h => h.status === 'Success').length;
+        document.getElementById('last-login').textContent = loginHistory[0]?.date || 'Never';
+
+        const historyList = document.getElementById('login-history-list');
+        historyList.innerHTML = loginHistory.map(entry => `
+            <div class="history-item">
+                <div class="history-date">${entry.date}</div>
+                <div class="history-ip">IP: ${entry.ip}</div>
+                <div class="history-status status-${entry.status.toLowerCase()}">${entry.status}</div>
+            </div>
+        `).join('');
+    }
+
+    exportData() {
+        this.showNotification('Exporting data...', 'info');
+        
+        // Simulate data export
+        setTimeout(() => {
+            const data = {
+                housingUnits: this.housingUnits,
+                inventoryItems: this.inventoryItems,
+                employees: this.employees,
+                rooms: this.rooms,
+                exportDate: new Date().toISOString()
+            };
+            
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `estate-data-export-${new Date().toISOString().split('T')[0]}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            
+            this.showNotification('Data exported successfully', 'success');
+        }, 1000);
+    }
+
+    showSystemSettings() {
+        document.getElementById('system-settings-form').style.display = 'block';
+        this.loadSystemSettings();
+    }
+
+    hideSystemSettings() {
+        document.getElementById('system-settings-form').style.display = 'none';
+    }
+
+    loadSystemSettings() {
+        // Load current system settings
+        document.getElementById('session-timeout').value = 30;
+        document.getElementById('backup-frequency').value = 'daily';
+        document.getElementById('email-notifications').checked = true;
+        document.getElementById('maintenance-mode').checked = false;
+    }
+
+    showActivityLog() {
+        document.getElementById('activity-log-form').style.display = 'block';
+        this.loadActivityLog();
+    }
+
+    hideActivityLog() {
+        document.getElementById('activity-log-form').style.display = 'none';
+    }
+
+    loadActivityLog() {
+        // Simulate activity log data
+        const activities = [
+            { date: '2024-01-15 10:30:00', user: 'test', action: 'Logged in', type: 'login' },
+            { date: '2024-01-15 10:35:00', user: 'test', action: 'Added new housing unit', type: 'data' },
+            { date: '2024-01-15 11:00:00', user: 'test', action: 'Updated inventory item', type: 'data' },
+            { date: '2024-01-15 11:30:00', user: 'test', action: 'System backup completed', type: 'system' }
+        ];
+
+        const activityList = document.getElementById('activity-log-list');
+        activityList.innerHTML = activities.map(activity => `
+            <div class="activity-item">
+                <div class="activity-time">${activity.date}</div>
+                <div class="activity-user">${activity.user}</div>
+                <div class="activity-action">${activity.action}</div>
+                <div class="activity-type type-${activity.type}">${activity.type}</div>
+            </div>
+        `).join('');
+    }
+
+    showSecuritySettings() {
+        document.getElementById('security-settings-form').style.display = 'block';
+        this.loadSecuritySettings();
+    }
+
+    hideSecuritySettings() {
+        document.getElementById('security-settings-form').style.display = 'none';
+    }
+
+    loadSecuritySettings() {
+        // Load current security settings
+        document.getElementById('two-factor-auth').checked = false;
+        document.getElementById('password-expiry').value = 90;
+        document.getElementById('failed-login-limit').value = 5;
+        document.getElementById('ip-restrictions').checked = false;
+    }
+
+    // User Management Methods
+    async loadUserManagement() {
+        if (this.currentUser.role !== 'super_admin') {
+            this.showNotification('Access denied. Super Admin role required.', 'error');
+            this.showSection('dashboard');
+            return;
+        }
+
+        try {
+            await this.loadUsers();
+            this.renderUserManagement();
+        } catch (error) {
+            console.error('Error loading user management:', error);
+            this.showNotification('Error loading user management', 'error');
+        }
+    }
+
+    async loadUsers() {
+        try {
+            const response = await fetch('/api/debug/users');
+            if (!response.ok) {
+                throw new Error('Failed to load users');
+            }
+            this.users = await response.json();
+        } catch (error) {
+            console.error('Error loading users:', error);
+            throw error;
+        }
+    }
+
+    renderUserManagement() {
+        const userListContent = document.getElementById('user-list-content');
+        const resetUserSelect = document.getElementById('reset-user-select');
+        
+        if (!userListContent || !resetUserSelect) return;
+
+        // Render user list
+        userListContent.innerHTML = this.users.map(user => `
+            <div class="user-card">
+                <div class="user-info">
+                    <h4>${user.username}</h4>
+                    <span class="user-role">${user.role.replace('_', ' ').toUpperCase()}</span>
+                </div>
+                <div class="user-actions">
+                    <button class="btn btn-sm btn-secondary" onclick="app.selectUserForReset('${user.username}')">
+                        <i class="fas fa-key"></i> Reset Password
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="app.deleteUser('${user.username}')" ${user.username === this.currentUser?.username ? 'disabled title="Cannot delete your own account"' : ''}>
+                        <i class="fas fa-trash"></i> Delete User
+                    </button>
+                </div>
+            </div>
+        `).join('');
+
+        // Populate reset user select
+        resetUserSelect.innerHTML = '<option value="">Choose a user...</option>' + 
+            this.users.map(user => `<option value="${user.username}">${user.username} (${user.role.replace('_', ' ').toUpperCase()})</option>`).join('');
+    }
+
+    selectUserForReset(username) {
+        const resetUserSelect = document.getElementById('reset-user-select');
+        if (resetUserSelect) {
+            resetUserSelect.value = username;
+        }
+    }
+
+    async resetUserPassword() {
+        const selectedUser = document.getElementById('reset-user-select').value;
+        const newPassword = document.getElementById('new-password-reset').value;
+        const confirmPassword = document.getElementById('confirm-password-reset').value;
+
+        if (!selectedUser) {
+            this.showNotification('Please select a user', 'error');
+            return;
+        }
+
+        if (!newPassword || !confirmPassword) {
+            this.showNotification('Please enter and confirm the new password', 'error');
+            return;
+        }
+
+        if (newPassword !== confirmPassword) {
+            this.showNotification('Password confirmation does not match', 'error');
+            return;
+        }
+
+        if (newPassword.length < 6) {
+            this.showNotification('Password must be at least 6 characters long', 'error');
+            return;
+        }
+
+        try {
+            // Find user ID
+            const user = this.users.find(u => u.username === selectedUser);
+            if (!user) {
+                this.showNotification('User not found', 'error');
+                return;
+            }
+
+            const response = await fetch('/api/admin/reset-password', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    targetUserId: user.id || user.username, // Fallback to username if no ID
+                    newPassword: newPassword
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to reset password');
+            }
+
+            this.showNotification(`Password reset successfully for ${selectedUser}`, 'success');
+            
+            // Clear form
+            document.getElementById('reset-user-select').value = '';
+            document.getElementById('new-password-reset').value = '';
+            document.getElementById('confirm-password-reset').value = '';
+        } catch (error) {
+            console.error('Error resetting password:', error);
+            this.showNotification(`Error resetting password: ${error.message}`, 'error');
+        }
+    }
+
+    async deleteUser(username) {
+        // Prevent deleting own account
+        if (username === this.currentUser?.username) {
+            this.showNotification('Cannot delete your own account', 'error');
+            return;
+        }
+
+        // Confirmation dialog
+        const confirmed = confirm(`Are you sure you want to delete user "${username}"?\n\nThis action cannot be undone and will permanently remove the user account.`);
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            // Find user ID
+            const user = this.users.find(u => u.username === username);
+            if (!user) {
+                this.showNotification('User not found', 'error');
+                return;
+            }
+
+            const response = await fetch(`/api/admin/delete-user/${user.id || user.username}`, {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.error || 'Failed to delete user');
+            }
+
+            this.showNotification(`User "${username}" deleted successfully`, 'success');
+            
+            // Refresh user list
+            await this.loadUsers();
+            this.renderUserManagement();
+            
+        } catch (error) {
+            console.error('Error deleting user:', error);
+            this.showNotification(`Error deleting user: ${error.message}`, 'error');
+        }
+    }
 }
 
 // Initialize the application when the DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    window.app = new EstateManagementApp();
+    console.log('DOM Content Loaded - Initializing app...');
+    try {
+        window.app = new EstateManagementApp();
+        console.log('App initialized successfully');
+    } catch (error) {
+        console.error('Error initializing app:', error);
+        // Create a minimal app instance for emergency login
+        window.app = {
+            simpleLogin: async function() {
+                try {
+                    const response = await fetch('/api/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ username: 'test', password: 'admin123' })
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        console.log('Emergency login successful:', data);
+                        alert('Login successful! Please refresh the page.');
+                        window.location.reload();
+                    } else {
+                        const errorData = await response.json();
+                        alert(`Login failed: ${errorData.error}`);
+                    }
+                } catch (error) {
+                    console.error('Emergency login error:', error);
+                    alert(`Login error: ${error.message}`);
+                }
+            }
+        };
+    }
 });
