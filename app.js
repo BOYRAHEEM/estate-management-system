@@ -12,8 +12,132 @@ class EstateManagementApp {
         this.currentEditId = null;
         this.currentUser = null;
         this.isAuthenticated = false;
+        this.activityLog = [];
+        this.loginHistory = [];
         
         this.init();
+    }
+
+    // Activity Logging Methods
+    logActivity(action, details = '', category = 'general') {
+        const activity = {
+            id: Date.now() + Math.random(),
+            timestamp: new Date(),
+            user: this.currentUser ? this.currentUser.username : 'Unknown',
+            action: action,
+            details: details,
+            category: category,
+            ip: '127.0.0.1' // In a real app, this would be the actual IP
+        };
+        
+        this.activityLog.unshift(activity);
+        
+        // Keep only last 100 activities
+        if (this.activityLog.length > 100) {
+            this.activityLog = this.activityLog.slice(0, 100);
+        }
+        
+        // Save to localStorage
+        this.saveActivityLog();
+        
+        // Update UI if activity log is currently visible
+        if (document.getElementById('activity-log-form').style.display === 'block') {
+            this.renderActivityLog();
+        }
+        
+        console.log('Activity logged:', activity);
+    }
+
+    saveActivityLog() {
+        try {
+            localStorage.setItem('activityLog', JSON.stringify(this.activityLog));
+        } catch (error) {
+            console.error('Error saving activity log:', error);
+        }
+    }
+
+    loadActivityLog() {
+        try {
+            const stored = localStorage.getItem('activityLog');
+            if (stored) {
+                this.activityLog = JSON.parse(stored);
+            }
+        } catch (error) {
+            console.error('Error loading activity log:', error);
+            this.activityLog = [];
+        }
+    }
+
+    logLogin(username, success = true) {
+        const login = {
+            id: Date.now() + Math.random(),
+            timestamp: new Date(),
+            username: username,
+            success: success,
+            ip: '127.0.0.1'
+        };
+        
+        this.loginHistory.unshift(login);
+        
+        // Keep only last 50 logins
+        if (this.loginHistory.length > 50) {
+            this.loginHistory = this.loginHistory.slice(0, 50);
+        }
+        
+        // Save to localStorage
+        this.saveLoginHistory();
+        
+        console.log('Login logged:', login);
+    }
+
+    saveLoginHistory() {
+        try {
+            localStorage.setItem('loginHistory', JSON.stringify(this.loginHistory));
+        } catch (error) {
+            console.error('Error saving login history:', error);
+        }
+    }
+
+    loadLoginHistory() {
+        try {
+            const stored = localStorage.getItem('loginHistory');
+            if (stored) {
+                this.loginHistory = JSON.parse(stored);
+            }
+        } catch (error) {
+            console.error('Error loading login history:', error);
+            this.loginHistory = [];
+        }
+    }
+
+    renderLoginHistory() {
+        const loginHistoryList = document.getElementById('login-history-list');
+        const totalLogins = document.getElementById('total-logins');
+        const lastLogin = document.getElementById('last-login');
+        
+        if (!loginHistoryList) return;
+        
+        if (this.loginHistory.length === 0) {
+            loginHistoryList.innerHTML = '<p class="empty-state">No login history available</p>';
+            return;
+        }
+        
+        loginHistoryList.innerHTML = this.loginHistory.map(login => `
+            <div class="login-history-item">
+                <div class="login-date">${this.formatTime(login.timestamp)}</div>
+                <div class="login-ip">${login.ip}</div>
+                <div class="login-status status-${login.success ? 'success' : 'failed'}">${login.success ? 'Success' : 'Failed'}</div>
+            </div>
+        `).join('');
+        
+        if (totalLogins) {
+            totalLogins.textContent = this.loginHistory.length;
+        }
+        
+        if (lastLogin) {
+            const lastLoginEntry = this.loginHistory.find(login => login.success);
+            lastLogin.textContent = lastLoginEntry ? this.formatTime(lastLoginEntry.timestamp) : 'Never';
+        }
     }
 
     async init() {
@@ -28,29 +152,27 @@ class EstateManagementApp {
             // Setup event listeners safely
             this.setupEventListeners();
             
-            // Clear any existing sessions first
-            try {
-                await fetch('/api/clear-session', { method: 'POST' });
-            } catch (error) {
-                // No existing session to clear
-            }
+            // Load activity logs
+            this.loadActivityLog();
+            this.loadLoginHistory();
             
-            // Start with login page visible (assume not authenticated until proven otherwise)
-            this.showLoginPage();
-            
-            // Check if user is already authenticated
+            // Check authentication first before showing any UI
             await this.checkAuthentication();
             
             if (this.isAuthenticated) {
-                // Show main app only if authenticated
+                // Show main app if authenticated
                 this.showMainApp();
                 await this.loadInitialData();
                 this.showSection('dashboard');
                 this.updateDashboard();
+            } else {
+                // Show login page only if not authenticated
+                this.showLoginPage();
             }
         } catch (error) {
             console.error('Error during app initialization:', error);
-            // Don't throw the error, just log it and continue
+            // Show login page on error
+            this.showLoginPage();
         }
     }
 
@@ -93,6 +215,39 @@ class EstateManagementApp {
             });
         }
 
+        // System settings form
+        const systemSettingsForm = document.getElementById('system-settings-form-content');
+        if (systemSettingsForm) {
+            systemSettingsForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.saveSystemSettings();
+            });
+        }
+
+        // Security settings form
+        const securitySettingsForm = document.getElementById('security-settings-form-content');
+        if (securitySettingsForm) {
+            securitySettingsForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.saveSecuritySettings();
+            });
+        }
+
+        // Activity log filters
+        const activityFilter = document.getElementById('activity-filter');
+        if (activityFilter) {
+            activityFilter.addEventListener('change', () => {
+                this.renderActivityLog();
+            });
+        }
+
+        const activityDateFilter = document.getElementById('activity-date-filter');
+        if (activityDateFilter) {
+            activityDateFilter.addEventListener('change', () => {
+                this.renderActivityLog();
+            });
+        }
+
         // Navigation
         document.querySelectorAll('.nav-btn').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -126,7 +281,7 @@ class EstateManagementApp {
         // Inventory filters
         const roomFilter = document.getElementById('room-filter');
         const categoryFilter = document.getElementById('category-filter');
-        const conditionFilter = document.getElementById('condition-filter');
+        
         const inventorySearch = document.getElementById('inventory-search');
 
         if (roomFilter) {
@@ -135,23 +290,17 @@ class EstateManagementApp {
         if (categoryFilter) {
             categoryFilter.addEventListener('change', () => this.filterInventory());
         }
-        if (conditionFilter) {
-            conditionFilter.addEventListener('change', () => this.filterInventory());
-        }
+        
         if (inventorySearch) {
             inventorySearch.addEventListener('input', () => this.filterInventory());
         }
 
         // Housing filters
         const housingTypeFilter = document.getElementById('housing-type-filter');
-        const occupancyFilter = document.getElementById('occupancy-filter');
         const housingSearch = document.getElementById('housing-search');
 
         if (housingTypeFilter) {
             housingTypeFilter.addEventListener('change', () => this.filterHousing());
-        }
-        if (occupancyFilter) {
-            occupancyFilter.addEventListener('change', () => this.filterHousing());
         }
         if (housingSearch) {
             housingSearch.addEventListener('input', () => this.filterHousing());
@@ -188,6 +337,14 @@ class EstateManagementApp {
             this.showEmployeeModal();
         });
 
+        // PDF Report Generation
+        const generatePdfBtn = document.getElementById('generate-pdf-report-btn');
+        if (generatePdfBtn) {
+			generatePdfBtn.addEventListener('click', () => {
+				this.openReportOptions();
+			});
+        }
+
         // Search and filters
         document.getElementById('housing-search').addEventListener('input', (e) => {
             this.filterHousing(e.target.value);
@@ -218,11 +375,7 @@ class EstateManagementApp {
         });
 
         // Dashboard controls
-        const typeFilter = document.getElementById('dashboard-type-filter');
-
-        if (typeFilter) {
-            typeFilter.addEventListener('change', () => this.updateDashboard());
-        }
+        // (Dashboard type filter removed)
 
         // User management
         const addUserBtn = document.getElementById('add-user-btn');
@@ -327,6 +480,10 @@ class EstateManagementApp {
                 this.showMainApp();
                 this.showNotification('Login successful!', 'success');
                 
+                // Log successful login
+                this.logLogin(username, true);
+                this.logActivity('User Login', `User ${username} logged in successfully`, 'authentication');
+                
                 // Load data after successful login
                 await this.loadInitialData();
                 this.showSection('dashboard');
@@ -335,16 +492,29 @@ class EstateManagementApp {
                 const errorData = await response.json();
                 console.log('Login failed, error data:', errorData);
                 this.showNotification(errorData.error || 'Login failed', 'error');
+                
+                // Log failed login
+                this.logLogin(username, false);
+                this.logActivity('Failed Login', `Failed login attempt for ${username}`, 'authentication');
             }
         } catch (error) {
             console.error('Login error:', error);
             this.showNotification('Login failed. Please try again.', 'error');
+            
+            // Log login error
+            this.logLogin(username, false);
+            this.logActivity('Login Error', `Login error for ${username}: ${error.message}`, 'authentication');
         }
     }
 
 
     async handleLogout() {
         try {
+            // Log logout before clearing user data
+            if (this.currentUser) {
+                this.logActivity('User Logout', `User ${this.currentUser.username} logged out`, 'authentication');
+            }
+            
             await fetch('/api/logout', {
                 method: 'POST',
                 credentials: 'include'
@@ -357,6 +527,7 @@ class EstateManagementApp {
         } catch (error) {
             console.error('Logout error:', error);
             this.showNotification('Logout failed', 'error');
+            this.logActivity('Logout Error', `Logout error: ${error.message}`, 'authentication');
         }
     }
 
@@ -364,18 +535,20 @@ class EstateManagementApp {
         // Show login page
         document.getElementById('login-page').classList.remove('hidden');
         document.getElementById('login-page').style.display = 'block';
+        document.getElementById('login-page').classList.add('visible');
         
         // Hide app completely
         document.getElementById('app').classList.add('hidden');
         document.getElementById('app').style.display = 'none';
-        document.getElementById('app').classList.remove('loaded');
+        document.getElementById('app').classList.remove('loaded', 'visible');
     }
 
     showMainApp() {
         document.getElementById('login-page').classList.add('hidden');
+        document.getElementById('login-page').classList.remove('visible');
         // Force show the app by setting display style directly
         document.getElementById('app').style.display = 'block';
-        document.getElementById('app').classList.add('loaded');
+        document.getElementById('app').classList.add('loaded', 'visible');
     }
 
     updateUserInterface() {
@@ -459,13 +632,28 @@ class EstateManagementApp {
 
     async loadInitialData() {
         try {
-            const [housingTypes, housingUnits, rooms, inventoryItems, employees] = await Promise.all([
-                this.fetchData('/api/housing-types'),
-                this.fetchData('/api/housing-units'),
-                this.fetchData('/api/rooms'),
-                this.fetchData('/api/inventory'),
-                this.fetchData('/api/employees')
-            ]);
+            console.log('Loading initial data...');
+            
+            // Load data one by one to identify which fails
+            console.log('Fetching housing types...');
+            const housingTypes = await this.fetchData('/api/housing-types');
+            console.log('Housing types loaded:', housingTypes.length);
+            
+            console.log('Fetching housing units...');
+            const housingUnits = await this.fetchData('/api/housing-units');
+            console.log('Housing units loaded:', housingUnits.length);
+            
+            console.log('Fetching rooms...');
+            const rooms = await this.fetchData('/api/rooms');
+            console.log('Rooms loaded:', rooms.length);
+            
+            console.log('Fetching inventory...');
+            const inventoryItems = await this.fetchData('/api/inventory');
+            console.log('Inventory items loaded:', inventoryItems.length);
+            
+            console.log('Fetching employees...');
+            const employees = await this.fetchData('/api/employees');
+            console.log('Employees loaded:', employees.length);
 
             this.housingTypes = housingTypes;
             this.housingUnits = housingUnits;
@@ -475,16 +663,17 @@ class EstateManagementApp {
 
             // Load damage reports for super admins to update notification badge
             if (this.currentUser && this.currentUser.role === 'super_admin') {
+                console.log('Fetching damage reports...');
                 await this.loadDamageReports();
             }
 
             this.populateHousingTypeFilter();
             this.populateRoomFilter();
-            // populate dashboard type filter once we have types
-            this.populateDashboardTypeFilter();
+            console.log('Initial data loaded successfully');
         } catch (error) {
             console.error('Error loading initial data:', error);
-            this.showNotification('Error loading data', 'error');
+            console.error('Error details:', error.message, error.stack);
+            this.showNotification(`Error loading data: ${error.message}`, 'error');
         }
     }
 
@@ -518,7 +707,16 @@ class EstateManagementApp {
                 this.showLoginPage();
                 throw new Error('Authentication required');
             }
-            throw new Error(`HTTP error! status: ${response.status}`);
+            // Try to extract error message from response
+            try {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+            } catch (e) {
+                if (e.message && e.message !== 'Authentication required') {
+                    throw e;
+                }
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
         }
         return await response.json();
     }
@@ -538,7 +736,16 @@ class EstateManagementApp {
                 this.showLoginPage();
                 throw new Error('Authentication required');
             }
-            throw new Error(`HTTP error! status: ${response.status}`);
+            // Try to extract error message from response
+            try {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+            } catch (e) {
+                if (e.message && e.message !== 'Authentication required') {
+                    throw e;
+                }
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
         }
         return await response.json();
     }
@@ -560,6 +767,10 @@ class EstateManagementApp {
     }
 
     async showSection(sectionName) {
+        // Normalize deprecated section names
+        if (sectionName === 'users') {
+            sectionName = 'user-management';
+        }
         // Update navigation
         document.querySelectorAll('.nav-btn').forEach(btn => {
             btn.classList.remove('active');
@@ -587,15 +798,6 @@ class EstateManagementApp {
                 break;
             case 'employees':
                 this.renderEmployeeList();
-                break;
-            case 'users':
-                if (this.currentUser && this.currentUser.role === 'super_admin') {
-                    this.loadUsers();
-                } else {
-                    this.showNotification('Access denied. Super Admin role required.', 'error');
-                    this.showSection('dashboard');
-                    return;
-                }
                 break;
             case 'damage-reports':
                 if (this.currentUser && this.currentUser.role === 'super_admin') {
@@ -632,7 +834,7 @@ class EstateManagementApp {
     }
 
     renderRecentHousing() {
-        const recentHousing = this.housingUnits.slice(0, 5);
+        const recentHousing = this.housingUnits.slice(0, 10);
         const container = document.getElementById('recent-housing');
         
         if (recentHousing.length === 0) {
@@ -708,51 +910,44 @@ class EstateManagementApp {
             return `<span title="${config.label}: ${item.count}">${config.label.slice(0,4).toUpperCase()}</span>`;
         }).join('');
         
+        // Calculate circumference for circular progress
+        const radius = 50;
+        const circumference = 2 * Math.PI * radius;
+        
         container.innerHTML = `
-            <div class="chart-header">
-                <h4>Room Occupancy Status</h4>
-                <p>Current room availability and occupancy rates</p>
-            </div>
-            <div class="bar-chart">${bars}</div>
-            <div class="bar-labels">${labels}</div>
-            <div class="chart-stats">
-                <div class="stat-item">
-                    <i class="fas fa-home"></i>
-                    <span class="stat-number">${roomStats.total}</span>
-                    <span class="stat-label">Total Rooms</span>
+            <div class="occupancy-redesign">
+                <!-- Summary Header -->
+                <div class="occupancy-header">
+                    <div class="occupancy-total">
+                        <div class="total-icon">
+                            <i class="fas fa-door-open"></i>
+                        </div>
+                        <div class="total-info">
+                            <span class="total-number">${roomStats.total}</span>
+                            <span class="total-label">Total Rooms</span>
+                        </div>
+                    </div>
+                    <div class="occupancy-percentage">
+                        <div class="percentage-circle">
+                            <svg viewBox="0 0 120 120">
+                                <circle class="bg-circle" cx="60" cy="60" r="${radius}"></circle>
+                                <circle class="progress-circle" cx="60" cy="60" r="${radius}"
+                                    stroke-dasharray="${circumference}"
+                                    stroke-dashoffset="${circumference - (occupiedPct / 100) * circumference}"></circle>
+                            </svg>
+                            <div class="percentage-text">
+                                <span class="percent-value">${occupiedPct}%</span>
+                                <span class="percent-label">Occupied</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="stat-item">
-                    <i class="fas fa-user" style="color: #e74c3c;"></i>
-                    <span class="stat-number">${roomStats.occupied}</span>
-                    <span class="stat-label">Occupied</span>
-                </div>
-                <div class="stat-item">
-                    <i class="fas fa-check" style="color: #27ae60;"></i>
-                    <span class="stat-number">${roomStats.available}</span>
-                    <span class="stat-label">Available</span>
-                </div>
-                <div class="stat-item">
-                    <i class="fas fa-tools" style="color: #f39c12;"></i>
-                    <span class="stat-number">${roomStats.maintenance}</span>
-                    <span class="stat-label">Maintenance</span>
-                </div>
+
             </div>
         `;
     }
 
-    populateDashboardTypeFilter() {
-        const typeFilter = document.getElementById('dashboard-type-filter');
-        if (!typeFilter) return;
-        const options = `
-            <option value="excellent">Excellent</option>
-            <option value="good">Good</option>
-            <option value="fair">Fair</option>
-            <option value="poor">Poor</option>
-            <option value="damaged">Damaged</option>
-            <option value="repairing">Repairing</option>
-        `;
-        typeFilter.innerHTML = options;
-    }
+    
 
 
     renderHousingUnits() {
@@ -803,7 +998,7 @@ class EstateManagementApp {
             this.employees.some(emp => emp.assigned_room_id === room.id)
         );
         
-        const occupancyStatus = occupiedRooms.length === 3 ? 'full' : 
+        const occupancyStatus = unitRooms.length > 0 && occupiedRooms.length === unitRooms.length ? 'full' : 
                                occupiedRooms.length > 0 ? 'partial' : 'empty';
         
         const occupancyText = occupancyStatus === 'full' ? 'Fully Occupied' :
@@ -877,26 +1072,16 @@ class EstateManagementApp {
 
     getFilteredHousingUnits() {
         const typeFilter = document.getElementById('housing-type-filter')?.value || '';
-        const occupancyFilter = document.getElementById('occupancy-filter')?.value || '';
         const searchTerm = document.getElementById('housing-search')?.value?.toLowerCase() || '';
 
         return this.housingUnits.filter(unit => {
             const matchesType = !typeFilter || (unit.type_name || 'Unknown Type') === typeFilter;
             
-            // Calculate occupancy for this unit
-            const unitRooms = this.rooms.filter(room => room.housing_unit_id === unit.id);
-            const occupiedRooms = unitRooms.filter(room => 
-                this.employees.some(emp => emp.assigned_room_id === room.id)
-            );
-            const occupancyStatus = occupiedRooms.length === 3 ? 'full' : 
-                                   occupiedRooms.length > 0 ? 'partial' : 'empty';
-            const matchesOccupancy = !occupancyFilter || occupancyStatus === occupancyFilter;
-            
             const matchesSearch = !searchTerm || 
                 unit.name.toLowerCase().includes(searchTerm) ||
                 (unit.type_name || 'Unknown Type').toLowerCase().includes(searchTerm);
 
-            return matchesType && matchesOccupancy && matchesSearch;
+            return matchesType && matchesSearch;
         });
     }
 
@@ -954,19 +1139,19 @@ class EstateManagementApp {
     getFilteredInventoryItems() {
         const roomFilter = document.getElementById('room-filter')?.value || '';
         const categoryFilter = document.getElementById('category-filter')?.value || '';
-        const conditionFilter = document.getElementById('condition-filter')?.value || '';
+        
         const searchTerm = document.getElementById('inventory-search')?.value?.toLowerCase() || '';
 
         return this.inventoryItems.filter(item => {
             const matchesRoom = !roomFilter || item.room_id === roomFilter;
             const matchesCategory = !categoryFilter || item.category === categoryFilter;
-            const matchesCondition = !conditionFilter || item.condition === conditionFilter;
+            
             const matchesSearch = !searchTerm || 
                 item.name.toLowerCase().includes(searchTerm) ||
                 item.description?.toLowerCase().includes(searchTerm) ||
                 item.category?.toLowerCase().includes(searchTerm);
 
-            return matchesRoom && matchesCategory && matchesCondition && matchesSearch;
+            return matchesRoom && matchesCategory && matchesSearch;
         });
     }
 
@@ -1070,10 +1255,27 @@ class EstateManagementApp {
         `;
     }
 
-    showModal(title, content) {
+    showModal(title, content, options) {
         document.getElementById('modal-title').textContent = title;
         document.getElementById('modal-body').innerHTML = content;
-        document.getElementById('modal-overlay').classList.add('active');
+        const overlay = document.getElementById('modal-overlay');
+        const saveBtn = document.getElementById('modal-save');
+        if (options) {
+            if (options.showSave === false) {
+                saveBtn.style.display = 'none';
+            } else {
+                saveBtn.style.display = '';
+            }
+            if (options.saveText) {
+                saveBtn.textContent = options.saveText;
+            } else {
+                saveBtn.textContent = 'Save';
+            }
+        } else {
+            saveBtn.style.display = '';
+            saveBtn.textContent = 'Save';
+        }
+        overlay.classList.add('active');
     }
 
     closeModal() {
@@ -1285,11 +1487,26 @@ class EstateManagementApp {
                     <label for="employee-room">Assigned Room</label>
                     <select id="employee-room">
                         <option value="">No room assigned</option>
-                        ${this.rooms.map(room => `
-                            <option value="${room.id}" ${employee?.assigned_room_id === room.id ? 'selected' : ''}>
-                                ${room.housing_unit_name || 'Unknown Unit'} - Room ${room.room_number || 'N/A'} (${room.room_type || 'Unknown Type'})
-                            </option>
-                        `).join('')}
+                        ${this.rooms.map(room => {
+                            // Check if room is already assigned to another active employee
+                            const isOccupied = this.employees.some(emp => 
+                                emp.assigned_room_id === room.id && 
+                                emp.status === 'active' && 
+                                emp.id !== employee?.id
+                            );
+                            
+                            // Show the room if it's not occupied, or if it's currently assigned to this employee
+                            const shouldShow = !isOccupied || employee?.assigned_room_id === room.id;
+                            
+                            if (shouldShow) {
+                                return `
+                                    <option value="${room.id}" ${employee?.assigned_room_id === room.id ? 'selected' : ''}>
+                                        ${room.housing_unit_name || 'Unknown Unit'} - Room ${room.room_number || 'N/A'} (${room.room_type || 'Unknown Type'})
+                                    </option>
+                                `;
+                            }
+                            return '';
+                        }).join('')}
                     </select>
                 </div>
                 
@@ -1430,7 +1647,9 @@ class EstateManagementApp {
             this.updateDashboard();
         } catch (error) {
             console.error('Error saving employee:', error);
-            this.showNotification('Error saving employee', 'error');
+            // Extract error message from the response
+            const errorMessage = error.message || error.error || 'Error saving employee';
+            this.showNotification(errorMessage, 'error');
         }
     }
 
@@ -1896,50 +2115,130 @@ class EstateManagementApp {
         const byRoom = rooms.map(room => {
             const roomItems = items.filter(i => i.room_id === room.id);
             const itemsHtml = roomItems.length === 0
-                ? `<div class="room-group-empty">No inventory items</div>`
+                ? `<div class="room-group-empty">
+                    <div class="empty-icon">
+                        <i class="fas fa-box-open"></i>
+                    </div>
+                    <p>No items in this room</p>
+                    <button class="btn btn-primary btn-sm" onclick="app.addInventoryForRoom('${room.id}')">
+                        <i class="fas fa-plus"></i> Add First Item
+                    </button>
+                </div>`
                 : roomItems.map(item => `
-                    <div class="card" style="margin-bottom: 0.75rem;">
-                        <div class="card-header">
-                            <h3 class="card-title">${item.name}</h3>
-                            <div class="card-actions">
-                                ${this.currentUser && this.currentUser.role === 'super_admin' ? '' : `
-                                ${item.condition === 'damaged' || item.condition === 'repairing' ? '' : `
-                                <button class="btn btn-soft-danger btn-sm" onclick="app.reportDamage('${item.id}')"><i class="fas fa-exclamation-triangle"></i> Report Damage</button>
-                                `}
-                                `}
-                                ${item.condition === 'repairing' ? `
-                                <span class="status-badge status-repairing"><i class="fas fa-tools"></i> Under Repair</span>
-                                ` : ''}
-                                ${item.condition === 'damaged' ? `
-                                <span class="status-badge status-damaged"><i class="fas fa-exclamation-triangle"></i> Damage Reported</span>
-                                ` : ''}
-                                ${this.currentUser && this.currentUser.role === 'super_admin' ? `
-                                <button class="btn btn-secondary" onclick="app.editInventory('${item.id}')"><i class="fas fa-edit"></i> Edit</button>
-                                <button class="btn btn-danger" onclick="app.deleteInventory('${item.id}')"><i class="fas fa-trash"></i> Delete</button>
-                                ` : ''}
+                    <div class="inventory-item-card">
+                        <div class="item-header">
+                            <div class="item-icon">
+                                <i class="fas fa-${this.getItemIcon(item.category)}"></i>
+                            </div>
+                            <div class="item-info">
+                                <h4 class="item-name">${item.name}</h4>
+                                <p class="item-category">${item.category}</p>
+                            </div>
+                            <div class="item-status">
+                                <span class="status-indicator status-${item.condition}"></span>
+                                <span class="status-text">${item.condition}</span>
                             </div>
                         </div>
-                        <div class="card-content">
-                            <div class="card-item"><span class="card-label">Category:</span><span class="card-value">${item.category}</span></div>
-                            <div class="card-item"><span class="card-label">Quantity:</span><span class="card-value">${item.quantity} ${item.unit || 'pcs'}</span></div>
-                            <div class="card-item"><span class="card-label">Condition:</span><span class="card-value"><span class="status-badge status-${item.condition}">${item.condition}</span>${this.isRecentlyRepaired(item) ? '<span class="recently-repaired-indicator">Recently Repaired</span>' : ''}</span></div>
-                            ${item.description ? `<div class="card-item"><span class="card-label">Description:</span><span class="card-value">${item.description}</span></div>` : ''}
+                        
+                        <div class="item-details">
+                            <div class="detail-row">
+                                <span class="detail-label">Quantity</span>
+                                <span class="detail-value">${item.quantity} ${item.unit || 'pcs'}</span>
+                            </div>
+                            ${item.description ? `
+                            <div class="detail-row">
+                                <span class="detail-label">Description</span>
+                                <span class="detail-value">${item.description}</span>
+                            </div>
+                            ` : ''}
+                        </div>
+                        
+                        <div class="item-actions">
+                            ${this.currentUser && this.currentUser.role === 'super_admin' ? '' : `
+                            ${item.condition === 'damaged' || item.condition === 'repairing' ? '' : `
+                            <button class="action-btn damage-btn" onclick="app.reportDamage('${item.id}')" title="Report Damage">
+                                <i class="fas fa-exclamation-triangle"></i>
+                            </button>
+                            `}
+                            `}
+                            ${item.condition === 'repairing' ? `
+                            <span class="status-badge repairing">
+                                <i class="fas fa-tools"></i> Under Repair
+                            </span>
+                            ` : ''}
+                            ${item.condition === 'damaged' ? `
+                            <span class="status-badge damaged">
+                                <i class="fas fa-exclamation-triangle"></i> Damaged
+                            </span>
+                            ` : ''}
+                            ${this.currentUser && this.currentUser.role === 'super_admin' ? `
+                            <button class="action-btn edit-btn" onclick="app.editInventory('${item.id}')" title="Edit Item">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button class="action-btn delete-btn" onclick="app.deleteInventory('${item.id}')" title="Delete Item">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                            ` : ''}
                         </div>
                     </div>
                 `).join('');
             return `
                 <div class="room-group">
-                    <div class="room-group-header">
-                        <h4>${room.housing_unit_name || 'Unknown Unit'} - Room ${room.room_number || 'N/A'} (${room.room_type || 'Unknown Type'})</h4>
-                        <div>
+                    <div class="room-group-header" onclick="app.toggleRoomInventory('${room.id}')">
+                        <div class="room-header-left">
+                            <i class="fas fa-chevron-right room-toggle-icon" id="toggle-icon-${room.id}"></i>
+                            <h4>${room.housing_unit_name || 'Unknown Unit'} - Room ${room.room_number || 'N/A'} (${room.room_type || 'Unknown Type'})</h4>
+                            <span class="item-count-badge">${roomItems.length} ${roomItems.length === 1 ? 'item' : 'items'}</span>
+                        </div>
+                        <div onclick="event.stopPropagation()">
                             <button class="btn btn-soft-success btn-sm btn-pill" onclick="app.addInventoryForRoom('${room.id}')"><i class="fas fa-plus"></i><span>Add item</span></button>
                         </div>
                     </div>
-                    <div class="room-group-body">${itemsHtml}</div>
+                    <div class="room-group-body collapsed" id="room-body-${room.id}">${itemsHtml}</div>
                 </div>
             `;
         }).join('');
         container.innerHTML = byRoom;
+    }
+
+    toggleRoomInventory(roomId) {
+        const roomBody = document.getElementById(`room-body-${roomId}`);
+        const toggleIcon = document.getElementById(`toggle-icon-${roomId}`);
+        
+        if (roomBody && toggleIcon) {
+            roomBody.classList.toggle('collapsed');
+            toggleIcon.classList.toggle('fa-chevron-right');
+            toggleIcon.classList.toggle('fa-chevron-down');
+        }
+    }
+
+    getItemIcon(category) {
+        const iconMap = {
+            'Smart TV': 'tv',
+            'Decoder': 'satellite-dish',
+            'Mattress': 'bed',
+            'Table': 'table',
+            'Chairs': 'chair',
+            'Sofa': 'couch',
+            'Gas cylinder': 'fire',
+            'Stove': 'fire-burner',
+            'Air-conditioner': 'snowflake',
+            'Bed frame': 'bed',
+            'Speakers': 'volume-up',
+            'Mirror': 'mirror',
+            'Wall clock': 'clock',
+            'Bookshelf': 'books',
+            'Pillows': 'pillow',
+            'Wardrobe': 'tshirt',
+            'Electronics': 'microchip',
+            'Furniture': 'chair',
+            'Kitchen': 'utensils',
+            'Bathroom': 'bath',
+            'Bedding': 'bed',
+            'Appliances': 'plug',
+            'Other': 'box'
+        };
+        return iconMap[category] || 'box';
     }
 
     filterEmployees(searchTerm) {
@@ -2174,12 +2473,6 @@ class EstateManagementApp {
                         <span class="card-label">Role:</span>
                         <span class="card-value">
                             <span class="status-badge status-${user.role}">${user.role.replace('_', ' ')}</span>
-                        </span>
-                    </div>
-                    <div class="card-item">
-                        <span class="card-label">Status:</span>
-                        <span class="card-value">
-                            <span class="status-badge status-${user.is_active ? 'active' : 'inactive'}">${user.is_active ? 'Active' : 'Inactive'}</span>
                         </span>
                     </div>
                     ${user.email ? `
@@ -2483,6 +2776,119 @@ class EstateManagementApp {
         }
     }
 
+    // PDF Report Generation
+	openReportOptions() {
+		const title = 'Generate PDF Report';
+		const content = `
+			<form id="report-options-form">
+				<div class="form-group">
+					<label for="report-housing-unit">Housing Unit</label>
+					<select id="report-housing-unit">
+						<option value="">All Housing Units</option>
+						${this.housingUnits.map(unit => `
+							<option value="${unit.id}">${unit.name}</option>
+						`).join('')}
+					</select>
+				</div>
+				<div class="form-group">
+					<label for="report-type">Report Type</label>
+					<select id="report-type">
+						<option value="full">Full Report (Rooms + Inventory + Damage)</option>
+						<option value="rooms">Rooms Only</option>
+						<option value="inventory">Inventory Only</option>
+						<option value="damage">Damage Reports Only</option>
+					</select>
+				</div>
+			</form>
+		`;
+
+		this.showModal(title, content, { showSave: true, saveText: 'Generate' });
+		const saveBtn = document.getElementById('modal-save');
+		if (saveBtn) {
+			saveBtn.onclick = () => {
+				const type = document.getElementById('report-type').value || 'full';
+				const housingUnitId = document.getElementById('report-housing-unit').value || '';
+				this.closeModal();
+				this.generatePdfReport(type, housingUnitId);
+			};
+		}
+	}
+
+	async generatePdfReport(type = 'full', housingUnitId = '') {
+        try {
+            // Show loading state
+            const generateBtn = document.getElementById('generate-pdf-report-btn');
+            const originalText = generateBtn.innerHTML;
+            generateBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating PDF...';
+            generateBtn.disabled = true;
+
+            // Build query parameters
+            let apiUrl = `/api/generate-report?type=${encodeURIComponent(type)}`;
+            if (housingUnitId) {
+                apiUrl += `&housing_unit_id=${encodeURIComponent(housingUnitId)}`;
+            }
+
+            // Make request to generate PDF
+			const response = await fetch(apiUrl, {
+                method: 'GET',
+                credentials: 'include'
+            });
+
+            if (!response.ok) {
+                // Try to get error details from response
+                let errorMessage = `HTTP error! status: ${response.status}`;
+                try {
+                    const errorData = await response.json();
+                    if (errorData.error) {
+                        errorMessage = errorData.error;
+                        if (errorData.details) {
+                            errorMessage += `: ${errorData.details}`;
+                        }
+                    }
+                } catch (e) {
+                    // If response is not JSON, use status text
+                    errorMessage = response.statusText || errorMessage;
+                }
+                throw new Error(errorMessage);
+            }
+
+            // Get the PDF blob
+            const blob = await response.blob();
+            
+            // Create download link
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            
+            // Get filename from response headers or use default
+            const contentDisposition = response.headers.get('Content-Disposition');
+			let filename = `${type}-report.pdf`;
+            if (contentDisposition) {
+                const filenameMatch = contentDisposition.match(/filename="(.+)"/);
+                if (filenameMatch) {
+                    filename = filenameMatch[1];
+                }
+            }
+            
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(url);
+
+            this.showNotification('PDF report generated successfully!', 'success');
+
+        } catch (error) {
+            console.error('PDF generation failed:', error);
+            this.showNotification(`Failed to generate PDF report: ${error.message}`, 'error');
+        } finally {
+            // Reset button state
+            const generateBtn = document.getElementById('generate-pdf-report-btn');
+            generateBtn.innerHTML = '<i class="fas fa-file-pdf"></i> Generate PDF Report';
+            generateBtn.disabled = false;
+        }
+    }
+
     // Check if an item was recently repaired (within 2 days)
     isRecentlyRepaired(item) {
         if (item.condition !== 'good') return false;
@@ -2603,7 +3009,7 @@ class EstateManagementApp {
             };
             console.log('Frontend - sending password data:', requestData);
             
-            await this.putData('/api/profile/password', requestData);
+            await this.putData('/api/change-password', requestData);
             
             this.showNotification('Password updated successfully', 'success');
             this.hideChangePasswordForm();
@@ -2617,6 +3023,7 @@ class EstateManagementApp {
     showLoginHistory() {
         document.getElementById('login-history-form').style.display = 'block';
         this.loadLoginHistory();
+        this.renderLoginHistory();
     }
 
     hideLoginHistory() {
@@ -2680,40 +3087,141 @@ class EstateManagementApp {
     }
 
     loadSystemSettings() {
-        // Load current system settings
-        document.getElementById('session-timeout').value = 30;
-        document.getElementById('backup-frequency').value = 'daily';
-        document.getElementById('email-notifications').checked = true;
-        document.getElementById('maintenance-mode').checked = false;
+        // Load current system settings from localStorage or defaults
+        const settings = this.getSystemSettings();
+        document.getElementById('session-timeout').value = settings.sessionTimeout;
+        document.getElementById('backup-frequency').value = settings.backupFrequency;
+    }
+
+    getSystemSettings() {
+        // Get settings from localStorage or return defaults
+        const defaultSettings = {
+            sessionTimeout: 30,
+            backupFrequency: 'daily'
+        };
+
+        try {
+            const stored = localStorage.getItem('systemSettings');
+            return stored ? { ...defaultSettings, ...JSON.parse(stored) } : defaultSettings;
+        } catch (error) {
+            console.error('Error loading system settings:', error);
+            return defaultSettings;
+        }
+    }
+
+    async saveSystemSettings() {
+        try {
+            const settings = {
+                sessionTimeout: parseInt(document.getElementById('session-timeout').value),
+                backupFrequency: document.getElementById('backup-frequency').value
+            };
+
+            // Validate settings
+            if (settings.sessionTimeout < 5 || settings.sessionTimeout > 480) {
+                this.showNotification('Session timeout must be between 5 and 480 minutes', 'error');
+                return;
+            }
+
+            // Save to localStorage
+            localStorage.setItem('systemSettings', JSON.stringify(settings));
+
+            // Apply settings
+            this.applySystemSettings(settings);
+
+            this.showNotification('System settings saved successfully', 'success');
+            this.hideSystemSettings();
+
+        } catch (error) {
+            console.error('Error saving system settings:', error);
+            this.showNotification('Failed to save system settings', 'error');
+        }
+    }
+
+    applySystemSettings(settings) {
+        // Apply session timeout (this would typically be handled server-side)
+        console.log('Applying session timeout:', settings.sessionTimeout, 'minutes');
+        
+        // Apply backup frequency
+        console.log('Backup frequency set to:', settings.backupFrequency);
     }
 
     showActivityLog() {
         document.getElementById('activity-log-form').style.display = 'block';
         this.loadActivityLog();
+        this.renderActivityLog();
     }
 
     hideActivityLog() {
         document.getElementById('activity-log-form').style.display = 'none';
     }
 
-    loadActivityLog() {
-        // Simulate activity log data
-        const activities = [
-            { date: '2024-01-15 10:30:00', user: 'test', action: 'Logged in', type: 'login' },
-            { date: '2024-01-15 10:35:00', user: 'test', action: 'Added new housing unit', type: 'data' },
-            { date: '2024-01-15 11:00:00', user: 'test', action: 'Updated inventory item', type: 'data' },
-            { date: '2024-01-15 11:30:00', user: 'test', action: 'System backup completed', type: 'system' }
-        ];
-
+    renderActivityLog() {
         const activityList = document.getElementById('activity-log-list');
-        activityList.innerHTML = activities.map(activity => `
+        if (!activityList) return;
+        
+        if (this.activityLog.length === 0) {
+            activityList.innerHTML = '<p class="empty-state">No activity logs available</p>';
+            return;
+        }
+        
+        const filter = document.getElementById('activity-filter')?.value || 'all';
+        const dateFilter = document.getElementById('activity-date-filter')?.value;
+        
+        let filteredActivities = this.activityLog;
+        
+        // Filter by category
+        if (filter !== 'all') {
+            filteredActivities = filteredActivities.filter(activity => activity.category === filter);
+        }
+        
+        // Filter by date
+        if (dateFilter) {
+            const filterDate = new Date(dateFilter);
+            filteredActivities = filteredActivities.filter(activity => {
+                const activityDate = new Date(activity.timestamp);
+                return activityDate.toDateString() === filterDate.toDateString();
+            });
+        }
+        
+        activityList.innerHTML = filteredActivities.map(activity => `
             <div class="activity-item">
-                <div class="activity-time">${activity.date}</div>
-                <div class="activity-user">${activity.user}</div>
-                <div class="activity-action">${activity.action}</div>
-                <div class="activity-type type-${activity.type}">${activity.type}</div>
+                <div class="activity-icon">
+                    <i class="fas fa-${this.getActivityIcon(activity.category)}"></i>
+                </div>
+                <div class="activity-content">
+                    <div class="activity-header">
+                        <span class="activity-action">${activity.action}</span>
+                        <span class="activity-time">${this.formatTime(activity.timestamp)}</span>
+                    </div>
+                    <div class="activity-details">${activity.details}</div>
+                    <div class="activity-meta">
+                        <span class="activity-user">${activity.user}</span>
+                        <span class="activity-category">${activity.category}</span>
+                    </div>
+                </div>
             </div>
         `).join('');
+    }
+    
+    getActivityIcon(category) {
+        const icons = {
+            'authentication': 'sign-in-alt',
+            'data': 'database',
+            'system': 'cog',
+            'general': 'info-circle'
+        };
+        return icons[category] || 'info-circle';
+    }
+    
+    formatTime(timestamp) {
+        const date = new Date(timestamp);
+        const now = new Date();
+        const diff = now - date;
+        
+        if (diff < 60000) return 'Just now';
+        if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+        if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+        return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
     }
 
     showSecuritySettings() {
@@ -2726,12 +3234,69 @@ class EstateManagementApp {
     }
 
     loadSecuritySettings() {
-        // Load current security settings
-        document.getElementById('two-factor-auth').checked = false;
-        document.getElementById('password-expiry').value = 90;
-        document.getElementById('failed-login-limit').value = 5;
-        document.getElementById('ip-restrictions').checked = false;
+        // Load current security settings from localStorage or defaults
+        const settings = this.getSecuritySettings();
+        document.getElementById('password-expiry').value = settings.passwordExpiry;
+        document.getElementById('failed-login-limit').value = settings.failedLoginLimit;
     }
+
+    getSecuritySettings() {
+        // Get security settings from localStorage or return defaults
+        const defaultSettings = {
+            passwordExpiry: 90,
+            failedLoginLimit: 5
+        };
+
+        try {
+            const stored = localStorage.getItem('securitySettings');
+            return stored ? { ...defaultSettings, ...JSON.parse(stored) } : defaultSettings;
+        } catch (error) {
+            console.error('Error loading security settings:', error);
+            return defaultSettings;
+        }
+    }
+
+    async saveSecuritySettings() {
+        try {
+            const settings = {
+                passwordExpiry: parseInt(document.getElementById('password-expiry').value),
+                failedLoginLimit: parseInt(document.getElementById('failed-login-limit').value)
+            };
+
+            // Validate settings
+            if (settings.passwordExpiry < 30 || settings.passwordExpiry > 365) {
+                this.showNotification('Password expiry must be between 30 and 365 days', 'error');
+                return;
+            }
+
+            if (settings.failedLoginLimit < 3 || settings.failedLoginLimit > 10) {
+                this.showNotification('Failed login limit must be between 3 and 10', 'error');
+                return;
+            }
+
+            // Save to localStorage
+            localStorage.setItem('securitySettings', JSON.stringify(settings));
+
+            // Apply settings
+            this.applySecuritySettings(settings);
+
+            this.showNotification('Security settings saved successfully', 'success');
+            this.hideSecuritySettings();
+
+        } catch (error) {
+            console.error('Error saving security settings:', error);
+            this.showNotification('Failed to save security settings', 'error');
+        }
+    }
+
+    applySecuritySettings(settings) {
+        // Apply password expiry
+        console.log('Password expiry set to:', settings.passwordExpiry, 'days');
+
+        // Apply failed login limit
+        console.log('Failed login limit set to:', settings.failedLoginLimit, 'attempts');
+    }
+
 
     // User Management Methods
     async loadUserManagement() {
@@ -2742,24 +3307,11 @@ class EstateManagementApp {
         }
 
         try {
-            await this.loadUsers();
+            this.users = await this.fetchData('/api/users');
             this.renderUserManagement();
         } catch (error) {
             console.error('Error loading user management:', error);
             this.showNotification('Error loading user management', 'error');
-        }
-    }
-
-    async loadUsers() {
-        try {
-            const response = await fetch('/api/debug/users');
-            if (!response.ok) {
-                throw new Error('Failed to load users');
-            }
-            this.users = await response.json();
-        } catch (error) {
-            console.error('Error loading users:', error);
-            throw error;
         }
     }
 
@@ -2780,7 +3332,7 @@ class EstateManagementApp {
                     <button class="btn btn-sm btn-secondary" onclick="app.selectUserForReset('${user.username}')">
                         <i class="fas fa-key"></i> Reset Password
                     </button>
-                    <button class="btn btn-sm btn-danger" onclick="app.deleteUser('${user.username}')" ${user.username === this.currentUser?.username ? 'disabled title="Cannot delete your own account"' : ''}>
+                    <button class="btn btn-sm btn-danger" onclick="app.deleteUser('${user.username}')" ${user.username === this.currentUser?.username ? 'disabled' : ''}>
                         <i class="fas fa-trash"></i> Delete User
                     </button>
                 </div>
@@ -2833,12 +3385,12 @@ class EstateManagementApp {
             }
 
             const response = await fetch('/api/admin/reset-password', {
-                method: 'POST',
+                method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    targetUserId: user.id || user.username, // Fallback to username if no ID
+                    username: selectedUser,
                     newPassword: newPassword
                 })
             });
@@ -2896,7 +3448,7 @@ class EstateManagementApp {
             this.showNotification(`User "${username}" deleted successfully`, 'success');
             
             // Refresh user list
-            await this.loadUsers();
+            this.users = await this.fetchData('/api/users');
             this.renderUserManagement();
             
         } catch (error) {

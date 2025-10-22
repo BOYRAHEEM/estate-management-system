@@ -1,214 +1,97 @@
 const express = require('express');
-const cors = require('cors');
 const session = require('express-session');
-const bcrypt = require('bcryptjs');
-const { v4: uuidv4 } = require('uuid');
+const mysql = require('mysql2/promise');
+const bcrypt = require('bcrypt');
 const path = require('path');
 const { getPool } = require('./db');
-
-// Helpers
-function toNullableString(value) {
-    if (value === undefined || value === null) return null;
-    const s = String(value).trim();
-    return s.length === 0 ? null : s;
-}
-function toIntOrDefault(value, def) {
-    const n = Number(value);
-    return Number.isFinite(n) ? Math.trunc(n) : def;
-}
-function friendlySqlError(err) {
-    if (!err || !err.number) return err?.message || 'Unknown error';
-    // Unique constraint
-    if (err.number === 2627 || err.number === 2601) return 'Duplicate value violates a unique constraint';
-    // FK errors
-    if (err.number === 547) return 'Related record not found (foreign key constraint)';
-    return err.message;
-}
+const MySQLStore = require('express-mysql-session')(session);
+const fs = require('fs');
+const puppeteer = require('puppeteer');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Session configuration
+// Middleware
+app.use(express.json());
+app.use(express.static(path.join(__dirname)));
+
+//Session configuration
+const sessionStore = new MySQLStore({
+    host: process.env.MYSQL_HOST || 'localhost',
+    user: process.env.MYSQL_USER || 'root',
+    password: process.env.MYSQL_PASSWORD || 'HTH_Server1',
+    database: process.env.MYSQL_DB || 'hospital_estate',
+    port: process.env.MYSQL_PORT ? parseInt(process.env.MYSQL_PORT, 10) : 3306,
+    clearExpired: true,
+    checkExpirationInterval: 900000,
+    expiration: 86400000
+});
+
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'hth-estate-secret-key-2024',
+    key: 'session_cookie_name',
+    secret: 'your-secret-key-change-in-production',
+    store: sessionStore,
     resave: false,
     saveUninitialized: false,
     cookie: {
-        secure: false, // Set to true if using HTTPS
-        httpOnly: true,
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+        maxAge: 1000 * 60 * 60 * 24 // 24 hours
     }
 }));
-
-// Middleware
-app.use(cors({
-    origin: true,
-    credentials: true
-}));
-app.use(express.json());
-app.use(express.static('.'));
-
-// Database schema initialization (MySQL)
-async function initSchema() {
-    const pool = await getPool();
-    // MySQL DDL (InnoDB, utf8mb4). Uses VARCHAR and DATETIME.
-    const ddlStatements = [
-        `CREATE TABLE IF NOT EXISTS housing_types (
-            id VARCHAR(50) NOT NULL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL UNIQUE,
-            description TEXT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
-        `CREATE TABLE IF NOT EXISTS housing_units (
-            id VARCHAR(50) NOT NULL PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
-            type_id VARCHAR(50) NOT NULL,
-            address VARCHAR(500) NOT NULL,
-            capacity INT DEFAULT 1,
-            status VARCHAR(50) DEFAULT 'available',
-            description TEXT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            CONSTRAINT FK_housing_units_type FOREIGN KEY (type_id) REFERENCES housing_types (id) ON DELETE RESTRICT ON UPDATE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
-        `CREATE TABLE IF NOT EXISTS rooms (
-            id VARCHAR(50) NOT NULL PRIMARY KEY,
-            housing_unit_id VARCHAR(50) NOT NULL,
-            room_number VARCHAR(50) NOT NULL,
-            room_type VARCHAR(50) NOT NULL,
-            capacity INT DEFAULT 1,
-            status VARCHAR(50) DEFAULT 'available',
-            description TEXT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            CONSTRAINT FK_rooms_unit FOREIGN KEY (housing_unit_id) REFERENCES housing_units (id) ON DELETE CASCADE ON UPDATE CASCADE,
-            INDEX idx_rooms_housing_unit_id (housing_unit_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
-        `CREATE TABLE IF NOT EXISTS inventory_items (
-            id VARCHAR(50) NOT NULL PRIMARY KEY,
-            room_id VARCHAR(50) NOT NULL,
-            name VARCHAR(255) NOT NULL,
-            category VARCHAR(100) NOT NULL,
-            quantity INT DEFAULT 1,
-            ` + "`condition`" + ` VARCHAR(50) DEFAULT 'good',
-            description TEXT NULL,
-            purchase_date DATE NULL,
-            warranty_expiry DATE NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            CONSTRAINT FK_inventory_room FOREIGN KEY (room_id) REFERENCES rooms (id) ON DELETE CASCADE ON UPDATE CASCADE,
-            INDEX idx_inventory_room_id (room_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
-        `CREATE TABLE IF NOT EXISTS employees (
-            id VARCHAR(50) NOT NULL PRIMARY KEY,
-            employee_id VARCHAR(100) NOT NULL UNIQUE,
-            name VARCHAR(255) NOT NULL,
-            department VARCHAR(255) NOT NULL,
-            position VARCHAR(255) NOT NULL,
-            email VARCHAR(255) NULL,
-            phone VARCHAR(50) NULL,
-            assigned_room_id VARCHAR(50) NULL,
-            status VARCHAR(50) DEFAULT 'active',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            CONSTRAINT FK_employees_room FOREIGN KEY (assigned_room_id) REFERENCES rooms (id) ON DELETE SET NULL ON UPDATE CASCADE,
-            INDEX idx_employees_assigned_room_id (assigned_room_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
-        `CREATE TABLE IF NOT EXISTS users (
-            id VARCHAR(50) NOT NULL PRIMARY KEY,
-            username VARCHAR(100) NOT NULL UNIQUE,
-            password_hash VARCHAR(255) NOT NULL,
-            role ENUM('admin', 'super_admin') NOT NULL DEFAULT 'admin',
-            full_name VARCHAR(255) NOT NULL,
-            email VARCHAR(255) NULL,
-            is_active BOOLEAN DEFAULT TRUE,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            INDEX idx_users_username (username),
-            INDEX idx_users_role (role)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
-        `CREATE TABLE IF NOT EXISTS damage_reports (
-            id VARCHAR(50) NOT NULL PRIMARY KEY,
-            item_id VARCHAR(50) NOT NULL,
-            damage_type VARCHAR(100) NOT NULL,
-            severity VARCHAR(50) NOT NULL,
-            description TEXT NOT NULL,
-            reported_by VARCHAR(255) NOT NULL,
-            damage_date DATE NULL,
-            estimated_cost DECIMAL(10,2) NULL,
-            repair_notes TEXT NULL,
-            status VARCHAR(50) DEFAULT 'pending',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            CONSTRAINT FK_damage_reports_item FOREIGN KEY (item_id) REFERENCES inventory_items (id) ON DELETE CASCADE ON UPDATE CASCADE,
-            INDEX idx_damage_reports_item_id (item_id),
-            INDEX idx_damage_reports_status (status)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
-    ];
-    for (const stmt of ddlStatements) {
-        await pool.query(stmt);
-    }
-    // Seed default housing types
-    await pool.query("INSERT IGNORE INTO housing_types (id, name, description) VALUES ('hth-bangalore','HTH Bangalore','Hospital staff housing in Bangalore')");
-    await pool.query("INSERT IGNORE INTO housing_types (id, name, description) VALUES ('rental-apartment','Rental Apartment','Rental apartments for hospital employees')");
-    await pool.query("INSERT IGNORE INTO housing_types (id, name, description) VALUES ('housement-flat','Housement Flat','Housement flats for hospital staff')");
-    
-    // Seed default admin users
-    const defaultPassword = 'admin123';
-    const hashedPassword = await bcrypt.hash(defaultPassword, 10);
-    
-    await pool.query(`INSERT IGNORE INTO users (id, username, password_hash, role, full_name, email) 
-                      VALUES ('admin-user-id', 'admin', ?, 'admin', 'System Admin', 'admin@hth.com')`, [hashedPassword]);
-    
-    await pool.query(`INSERT IGNORE INTO users (id, username, password_hash, role, full_name, email) 
-                      VALUES ('super-admin-user-id', 'superadmin', ?, 'super_admin', 'Super Admin', 'superadmin@hth.com')`, [hashedPassword]);
-}
 
 // Authentication middleware
-function requireAuth(req, res, next) {
-    if (!req.session.user) {
-        return res.status(401).json({ error: 'Authentication required' });
+const requireAuth = (req, res, next) => {
+    if (req.session.user) {
+        next();
+    } else {
+        res.status(401).json({ error: 'Authentication required' });
     }
-    next();
+};
+
+const requireSuperAdmin = (req, res, next) => {
+    if (req.session.user && req.session.user.role === 'super_admin') {
+        next();
+    } else {
+        res.status(403).json({ error: 'Super admin access required' });
+    }
+};
+
+// Helper function: Convert value to string or null
+function toNullableString(val) {
+    if (val === undefined || val === null || val === '') return null;
+    return String(val).trim();
 }
 
-function requireSuperAdmin(req, res, next) {
-    if (!req.session.user || req.session.user.role !== 'super_admin') {
-        return res.status(403).json({ error: 'Super Admin access required' });
-    }
-    next();
+function toIntOrDefault(val, defaultVal) {
+    const num = parseInt(val, 10);
+    return isNaN(num) ? defaultVal : num;
 }
 
-function requireAdminOrSuperAdmin(req, res, next) {
-    if (!req.session.user || (req.session.user.role !== 'admin' && req.session.user.role !== 'super_admin')) {
-        return res.status(403).json({ error: 'Admin or Super Admin access required' });
+function friendlySqlError(err) {
+    if (err.code === 'ER_DUP_ENTRY') {
+        return 'A record with this identifier already exists.';
     }
-    next();
+    if (err.code === 'ER_NO_REFERENCED_ROW_2') {
+        return 'Referenced record does not exist.';
+    }
+    return err.message;
 }
 
-// API Routes
+// ====== ROUTES ======
 
-// Authentication Routes
+// Login route
 app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     
-    console.log('Login attempt:', { username, password: password ? 'provided' : 'missing' });
-    
     if (!username || !password) {
-        return res.status(400).json({ error: 'Username and password are required' });
+        return res.status(400).json({ error: 'Username and password required' });
     }
     
     try {
         const pool = await getPool();
-        const [rows] = await pool.query(
-            'SELECT id, username, password_hash, role, full_name, email FROM users WHERE username = ? AND is_active = TRUE',
-            [username]
-        );
+        const [rows] = await pool.query('SELECT * FROM users WHERE username = ?', [username]);
         
-        console.log('User found:', rows.length > 0 ? 'yes' : 'no');
-        if (rows.length > 0) {
-            console.log('User details:', { id: rows[0].id, username: rows[0].username, role: rows[0].role });
-        }
+        console.log('Login attempt for user:', username);
+        console.log('User found:', rows.length > 0);
         
         if (rows.length === 0) {
             return res.status(401).json({ error: 'Invalid credentials' });
@@ -242,29 +125,59 @@ app.post('/api/login', async (req, res) => {
                 email: user.email
             }
         });
-    } catch (err) {
-        console.error('Login failed:', err);
+    } catch (error) {
+        console.error('Login error:', error);
         res.status(500).json({ error: 'Login failed' });
     }
 });
 
+// Logout
 app.post('/api/logout', (req, res) => {
-    req.session.destroy((err) => {
-        if (err) {
-            return res.status(500).json({ error: 'Logout failed' });
-        }
-        res.json({ message: 'Logout successful' });
-    });
+    req.session.destroy();
+    res.json({ message: 'Logged out' });
 });
 
-app.get('/api/auth/me', (req, res) => {
-    if (!req.session.user) {
-        return res.status(401).json({ error: 'Not authenticated' });
-    }
-    
+// Get current user
+app.get('/api/current-user', requireAuth, (req, res) => {
     res.json({ user: req.session.user });
 });
 
+// Get profile
+app.get('/api/profile', requireAuth, async (req, res) => {
+    try {
+        const pool = await getPool();
+        const [rows] = await pool.query('SELECT id, username, role, full_name, email, created_at FROM users WHERE id = ?', [req.session.user.id]);
+        if (rows.length === 0) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+        res.json(rows[0]);
+    } catch (err) {
+            res.status(500).json({ error: err.message });
+        }
+});
+
+// Dashboard Stats
+app.get('/api/dashboard/stats', requireAuth, async (req, res) => {
+    try {
+        const pool = await getPool();
+        
+        const [housingCount] = await pool.query('SELECT COUNT(*) as count FROM housing_units');
+        const [roomCount] = await pool.query('SELECT COUNT(*) as count FROM rooms');
+        const [itemCount] = await pool.query('SELECT COUNT(*) as count FROM inventory_items');
+        const [employeeCount] = await pool.query('SELECT COUNT(*) as count FROM employees');
+        
+        res.json({
+            totalHousing: housingCount[0].count,
+            totalRooms: roomCount[0].count,
+            totalItems: itemCount[0].count,
+            totalEmployees: employeeCount[0].count
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Housing Units
 // Housing Types
 app.get('/api/housing-types', requireAuth, async (req, res) => {
     try {
@@ -272,34 +185,14 @@ app.get('/api/housing-types', requireAuth, async (req, res) => {
         const [rows] = await pool.query('SELECT * FROM housing_types ORDER BY name');
         res.json(rows);
     } catch (err) {
-            res.status(500).json({ error: err.message });
-        }
-});
-
-app.post('/api/housing-types', requireSuperAdmin, async (req, res) => {
-    const name = toNullableString(req.body.name);
-    const description = toNullableString(req.body.description);
-    const id = uuidv4();
-    try {
-        const pool = await getPool();
-        await pool.query('INSERT INTO housing_types (id, name, description) VALUES (?, ?, ?)', [id, name, description]);
-        res.json({ id, name, description });
-    } catch (err) {
-        console.error('Create housing-type failed:', err, req.body);
-        res.status(500).json({ error: friendlySqlError(err) });
+        res.status(500).json({ error: err.message });
     }
 });
 
-// Housing Units
 app.get('/api/housing-units', requireAuth, async (req, res) => {
-    const query = `
-        SELECT hu.*, ht.name as type_name 
-        FROM housing_units hu 
-        JOIN housing_types ht ON hu.type_id = ht.id 
-        ORDER BY hu.name`;
     try {
         const pool = await getPool();
-        const [rows] = await pool.query(query);
+        const [rows] = await pool.query('SELECT * FROM housing_units ORDER BY name');
         res.json(rows);
     } catch (err) {
             res.status(500).json({ error: err.message });
@@ -308,39 +201,35 @@ app.get('/api/housing-units', requireAuth, async (req, res) => {
 
 app.post('/api/housing-units', requireSuperAdmin, async (req, res) => {
     const name = toNullableString(req.body.name);
-    const type_id = toNullableString(req.body.type_id);
-    const address = toNullableString(req.body.address);
-    const capacity = toIntOrDefault(req.body.capacity, 1);
-    const status = toNullableString(req.body.status) || 'available';
+    const location = toNullableString(req.body.location);
+    const total_rooms = toIntOrDefault(req.body.total_rooms, 0);
     const description = toNullableString(req.body.description);
-    const id = uuidv4();
     try {
         const pool = await getPool();
-        await pool.query(`INSERT INTO housing_units (id, name, type_id, address, capacity, status, description) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?)`, [id, name, type_id, address, capacity, status, description]);
-        res.json({ id, name, type_id, address, capacity, status, description });
+        const [result] = await pool.query(
+            'INSERT INTO housing_units (name, location, total_rooms, description) VALUES (?, ?, ?, ?)',
+            [name, location, total_rooms, description]
+        );
+        res.json({ id: result.insertId, message: 'Housing unit added' });
     } catch (err) {
-        console.error('Create housing-unit failed:', err, req.body);
         res.status(500).json({ error: friendlySqlError(err) });
     }
 });
 
 app.put('/api/housing-units/:id', requireSuperAdmin, async (req, res) => {
     const name = toNullableString(req.body.name);
-    const type_id = toNullableString(req.body.type_id);
-    const address = toNullableString(req.body.address);
-    const capacity = toIntOrDefault(req.body.capacity, 1);
-    const status = toNullableString(req.body.status) || 'available';
+    const location = toNullableString(req.body.location);
+    const total_rooms = toIntOrDefault(req.body.total_rooms, 0);
     const description = toNullableString(req.body.description);
     const id = req.params.id;
     try {
         const pool = await getPool();
-        await pool.query(`UPDATE housing_units 
-                    SET name=?, type_id=?, address=?, capacity=?, status=?, description=?
-                    WHERE id=?`, [name, type_id, address, capacity, status, description, id]);
-        res.json({ message: 'Housing unit updated successfully' });
+        await pool.query(
+            'UPDATE housing_units SET name=?, location=?, total_rooms=?, description=? WHERE id=?',
+            [name, location, total_rooms, description, id]
+        );
+        res.json({ message: 'Housing unit updated' });
     } catch (err) {
-        console.error('Update housing-unit failed:', err, req.body);
         res.status(500).json({ error: friendlySqlError(err) });
     }
 });
@@ -349,31 +238,31 @@ app.delete('/api/housing-units/:id', requireSuperAdmin, async (req, res) => {
     const id = req.params.id;
     try {
         const pool = await getPool();
-        await pool.query('DELETE FROM housing_units WHERE id = ?', [id]);
-        res.json({ message: 'Housing unit deleted successfully' });
+        await pool.query('DELETE FROM housing_units WHERE id=?', [id]);
+        res.json({ message: 'Housing unit deleted' });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: friendlySqlError(err) });
     }
 });
 
 // Rooms
 app.get('/api/rooms', requireAuth, async (req, res) => {
-    const housingUnitId = req.query.housing_unit_id;
-    let query = `
-        SELECT r.*, hu.name as housing_unit_name, hu.address as housing_address
-        FROM rooms r 
-        JOIN housing_units hu ON r.housing_unit_id = hu.id`;
     try {
         const pool = await getPool();
+    const housingUnitId = req.query.housing_unit_id;
+    let query = `
+            SELECT r.*, hu.name as housing_unit_name 
+        FROM rooms r 
+            LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
+        `;
+        let params = [];
         if (housingUnitId) {
             query += ' WHERE r.housing_unit_id = ?';
-            const [rows] = await pool.query(query, [housingUnitId]);
-            res.json(rows);
-        } else {
-            query += ' ORDER BY r.room_number';
-            const [rows] = await pool.query(query);
-            res.json(rows);
+            params.push(housingUnitId);
         }
+        query += ' ORDER BY hu.name, r.room_number';
+        const [rows] = await pool.query(query, params);
+        res.json(rows);
     } catch (err) {
                 res.status(500).json({ error: err.message });
     }
@@ -386,14 +275,16 @@ app.post('/api/rooms', requireSuperAdmin, async (req, res) => {
     const capacity = toIntOrDefault(req.body.capacity, 1);
     const status = toNullableString(req.body.status) || 'available';
     const description = toNullableString(req.body.description);
-    const id = uuidv4();
     try {
         const pool = await getPool();
-        await pool.query(`INSERT INTO rooms (id, housing_unit_id, room_number, room_type, capacity, status, description)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)`, [id, housing_unit_id, room_number, room_type, capacity, status, description]);
-        res.json({ id, housing_unit_id, room_number, room_type, capacity, status, description });
+        const [result] = await pool.query(`
+            INSERT INTO rooms (housing_unit_id, room_number, room_type, capacity, status, description)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+            [housing_unit_id, room_number, room_type, capacity, status, description]
+        );
+        res.json({ id: result.insertId, message: 'Room added' });
     } catch (err) {
-        console.error('Create room failed:', err, req.body);
+        console.error('Insert room failed:', err, req.body);
         res.status(500).json({ error: friendlySqlError(err) });
     }
 });
@@ -423,52 +314,44 @@ app.delete('/api/rooms/:id', requireSuperAdmin, async (req, res) => {
         const pool = await getPool();
         await pool.query('DELETE FROM rooms WHERE id=?', [id]);
         res.json({ message: 'Room deleted successfully' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+    }
+    catch (err) {
+        res.status(500).json({ error: friendlySqlError(err) });
     }
 });
 
-// Inventory Items
+// Inventory
 app.get('/api/inventory', requireAuth, async (req, res) => {
-    const roomId = req.query.room_id;
-    let query = `
-        SELECT i.*, r.room_number, r.room_type, hu.name as housing_unit_name
-        FROM inventory_items i 
-        JOIN rooms r ON i.room_id = r.id 
-        JOIN housing_units hu ON r.housing_unit_id = hu.id`;
     try {
         const pool = await getPool();
-        if (roomId) {
-            query += ' WHERE i.room_id = ?';
-            const [rows] = await pool.query(query, [roomId]);
+        const [rows] = await pool.query(`
+            SELECT i.*, r.room_number, r.room_type, hu.name as housing_unit_name 
+            FROM inventory_items i
+            LEFT JOIN rooms r ON i.room_id = r.id
+            LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
+            ORDER BY hu.name, r.room_number, i.category, i.name
+        `);
             res.json(rows);
-        } else {
-            query += ' ORDER BY i.name';
-            const [rows] = await pool.query(query);
-            res.json(rows);
-        }
     } catch (err) {
                 res.status(500).json({ error: err.message });
     }
 });
 
-app.post('/api/inventory', requireAdminOrSuperAdmin, async (req, res) => {
+app.post('/api/inventory', requireSuperAdmin, async (req, res) => {
     const room_id = toNullableString(req.body.room_id);
     const name = toNullableString(req.body.name);
     const category = toNullableString(req.body.category);
     const quantity = toIntOrDefault(req.body.quantity, 1);
     const condition = toNullableString(req.body.condition) || 'good';
     const description = toNullableString(req.body.description);
-    const purchase_date = toNullableString(req.body.purchase_date);
-    const warranty_expiry = toNullableString(req.body.warranty_expiry);
-    const id = uuidv4();
     try {
         const pool = await getPool();
-        await pool.query(`INSERT INTO inventory_items (id, room_id, name, category, quantity, \`condition\`, description, purchase_date, warranty_expiry)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, room_id, name, category, quantity, condition, description, purchase_date, warranty_expiry]);
-        res.json({ id, room_id, name, category, quantity, condition, description, purchase_date, warranty_expiry });
+        const [result] = await pool.query(
+            'INSERT INTO inventory_items (room_id, name, category, quantity, `condition`, description) VALUES (?, ?, ?, ?, ?, ?)',
+            [room_id, name, category, quantity, condition, description]
+        );
+        res.json({ id: result.insertId, message: 'Inventory item added' });
     } catch (err) {
-        console.error('Create inventory failed:', err, req.body);
         res.status(500).json({ error: friendlySqlError(err) });
     }
 });
@@ -477,19 +360,17 @@ app.put('/api/inventory/:id', requireSuperAdmin, async (req, res) => {
     const name = toNullableString(req.body.name);
     const category = toNullableString(req.body.category);
     const quantity = toIntOrDefault(req.body.quantity, 1);
-    const condition = toNullableString(req.body.condition);
+    const condition = toNullableString(req.body.condition) || 'good';
     const description = toNullableString(req.body.description);
-    const purchase_date = toNullableString(req.body.purchase_date);
-    const warranty_expiry = toNullableString(req.body.warranty_expiry);
     const id = req.params.id;
     try {
         const pool = await getPool();
-        await pool.query(`UPDATE inventory_items 
-                    SET name=?, category=?, quantity=?, \`condition\`=?, description=?, purchase_date=?, warranty_expiry=?
-                    WHERE id=?`, [name, category, quantity, condition, description, purchase_date, warranty_expiry, id]);
-        res.json({ message: 'Inventory item updated successfully' });
+        await pool.query(
+            'UPDATE inventory_items SET name=?, category=?, quantity=?, `condition`=?, description=? WHERE id=?',
+            [name, category, quantity, condition, description, id]
+        );
+        res.json({ message: 'Inventory item updated' });
     } catch (err) {
-        console.error('Update inventory failed:', err, req.body);
         res.status(500).json({ error: friendlySqlError(err) });
     }
 });
@@ -499,23 +380,23 @@ app.delete('/api/inventory/:id', requireSuperAdmin, async (req, res) => {
     try {
         const pool = await getPool();
         await pool.query('DELETE FROM inventory_items WHERE id=?', [id]);
-        res.json({ message: 'Inventory item deleted successfully' });
+        res.json({ message: 'Inventory item deleted' });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: friendlySqlError(err) });
     }
 });
 
 // Employees
 app.get('/api/employees', requireAuth, async (req, res) => {
-    const query = `
+    try {
+        const pool = await getPool();
+        const [rows] = await pool.query(`
         SELECT e.*, r.room_number, r.room_type, hu.name as housing_unit_name
         FROM employees e 
         LEFT JOIN rooms r ON e.assigned_room_id = r.id 
         LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
-        ORDER BY e.name`;
-    try {
-        const pool = await getPool();
-        const [rows] = await pool.query(query);
+            ORDER BY e.name
+        `);
         res.json(rows);
     } catch (err) {
             res.status(500).json({ error: err.message });
@@ -531,14 +412,30 @@ app.post('/api/employees', requireSuperAdmin, async (req, res) => {
     const phone = toNullableString(req.body.phone);
     const assigned_room_id = toNullableString(req.body.assigned_room_id);
     const status = toNullableString(req.body.status) || 'active';
-    const id = uuidv4();
+
     try {
         const pool = await getPool();
-        await pool.query(`INSERT INTO employees (id, employee_id, name, department, position, email, phone, assigned_room_id, status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [id, employee_id, name, department, position, email, phone, assigned_room_id, status]);
-        res.json({ id, employee_id, name, department, position, email, phone, assigned_room_id, status });
+        
+        // Check if room is already assigned to another employee
+        if (assigned_room_id) {
+            const [existingAssignment] = await pool.query(
+                'SELECT e.name, e.employee_id FROM employees e WHERE e.assigned_room_id = ? AND e.status = "active"',
+                [assigned_room_id]
+            );
+            
+            if (existingAssignment.length > 0) {
+                return res.status(400).json({ 
+                    error: `Room is already assigned to ${existingAssignment[0].name} (${existingAssignment[0].employee_id})` 
+                });
+            }
+        }
+
+        const [result] = await pool.query(
+            'INSERT INTO employees (employee_id, name, department, position, email, phone, assigned_room_id, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [employee_id, name, department, position, email, phone, assigned_room_id, status]
+        );
+        res.json({ id: result.insertId, message: 'Employee added' });
     } catch (err) {
-        console.error('Create employee failed:', err, req.body);
         res.status(500).json({ error: friendlySqlError(err) });
     }
 });
@@ -551,16 +448,32 @@ app.put('/api/employees/:id', requireSuperAdmin, async (req, res) => {
     const email = toNullableString(req.body.email);
     const phone = toNullableString(req.body.phone);
     const assigned_room_id = toNullableString(req.body.assigned_room_id);
-    const status = toNullableString(req.body.status);
+    const status = toNullableString(req.body.status) || 'active';
     const id = req.params.id;
+
     try {
         const pool = await getPool();
-        await pool.query(`UPDATE employees 
-                    SET employee_id=?, name=?, department=?, position=?, email=?, phone=?, assigned_room_id=?, status=?
-                    WHERE id=?`, [employee_id, name, department, position, email, phone, assigned_room_id, status, id]);
-        res.json({ message: 'Employee updated successfully' });
+        
+        // Check if room is already assigned to another employee (excluding current employee)
+        if (assigned_room_id) {
+            const [existingAssignment] = await pool.query(
+                'SELECT e.name, e.employee_id FROM employees e WHERE e.assigned_room_id = ? AND e.id != ? AND e.status = "active"',
+                [assigned_room_id, id]
+            );
+            
+            if (existingAssignment.length > 0) {
+                return res.status(400).json({ 
+                    error: `Room is already assigned to ${existingAssignment[0].name} (${existingAssignment[0].employee_id})` 
+                });
+            }
+        }
+
+        await pool.query(
+            'UPDATE employees SET employee_id=?, name=?, department=?, position=?, email=?, phone=?, assigned_room_id=?, status=? WHERE id=?',
+            [employee_id, name, department, position, email, phone, assigned_room_id, status, id]
+        );
+        res.json({ message: 'Employee updated' });
     } catch (err) {
-        console.error('Update employee failed:', err, req.body);
         res.status(500).json({ error: friendlySqlError(err) });
     }
 });
@@ -570,30 +483,9 @@ app.delete('/api/employees/:id', requireSuperAdmin, async (req, res) => {
     try {
         const pool = await getPool();
         await pool.query('DELETE FROM employees WHERE id=?', [id]);
-        res.json({ message: 'Employee deleted successfully' });
+        res.json({ message: 'Employee deleted' });
     } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Dashboard Statistics
-app.get('/api/dashboard/stats', requireAuth, async (req, res) => {
-    try {
-        const pool = await getPool();
-        const [[h],[r],[i],[e]] = await Promise.all([
-            pool.query('SELECT COUNT(1) AS count FROM housing_units'),
-            pool.query('SELECT COUNT(1) AS count FROM rooms'),
-            pool.query('SELECT COUNT(1) AS count FROM inventory_items'),
-            pool.query('SELECT COUNT(1) AS count FROM employees')
-        ]);
-        res.json({
-            totalHousing: h[0].count,
-            totalRooms: r[0].count,
-            totalItems: i[0].count,
-            totalEmployees: e[0].count
-        });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).json({ error: friendlySqlError(err) });
     }
 });
 
@@ -611,64 +503,44 @@ app.get('/api/users', requireSuperAdmin, async (req, res) => {
 app.post('/api/users', requireSuperAdmin, async (req, res) => {
     const { username, password, role, full_name, email } = req.body;
     
-    if (!username || !password || !role || !full_name) {
-        return res.status(400).json({ error: 'Username, password, role, and full name are required' });
-    }
-    
-    if (!['admin', 'super_admin'].includes(role)) {
-        return res.status(400).json({ error: 'Invalid role. Must be admin or super_admin' });
+    if (!username || !password || !role) {
+        return res.status(400).json({ error: 'Username, password, and role are required' });
     }
     
     try {
         const pool = await getPool();
         const hashedPassword = await bcrypt.hash(password, 10);
-        const id = uuidv4();
         
-        await pool.query(
-            'INSERT INTO users (id, username, password_hash, role, full_name, email) VALUES (?, ?, ?, ?, ?, ?)',
-            [id, username, hashedPassword, role, full_name, email]
+        const [result] = await pool.query(
+            'INSERT INTO users (username, password_hash, role, full_name, email) VALUES (?, ?, ?, ?, ?)',
+            [username, hashedPassword, role, full_name || username, email]
         );
         
-        res.json({ message: 'User created successfully', id });
+        res.json({ id: result.insertId, message: 'User created successfully' });
     } catch (err) {
         if (err.code === 'ER_DUP_ENTRY') {
             res.status(400).json({ error: 'Username already exists' });
         } else {
-            console.error('Create user failed:', err);
-            res.status(500).json({ error: friendlySqlError(err) });
+            res.status(500).json({ error: err.message });
         }
     }
 });
 
 app.put('/api/users/:id', requireSuperAdmin, async (req, res) => {
-    const { username, role, full_name, email, is_active } = req.body;
-    const userId = req.params.id;
+    const { role, full_name, email } = req.body;
+    const id = req.params.id;
     
     try {
         const pool = await getPool();
-        
-        // Check if updating password
-        let updateFields = ['role = ?', 'full_name = ?', 'email = ?', 'is_active = ?'];
-        let updateValues = [role, full_name, email, is_active];
-        
-        if (username) {
-            updateFields.push('username = ?');
-            updateValues.push(username);
-        }
-        
-        updateValues.push(userId);
-        
         await pool.query(
-            `UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`,
-            updateValues
+            'UPDATE users SET role = ?, full_name = ?, email = ? WHERE id = ?',
+            [role, full_name, email, id]
         );
-        
         res.json({ message: 'User updated successfully' });
     } catch (err) {
-        if (err.code === 'ER_DUP_ENTRY') {
-            res.status(400).json({ error: 'Username already exists' });
+        if (err.code === 'ER_NO_REFERENCED_ROW_2') {
+            res.status(404).json({ error: 'User not found' });
         } else {
-            console.error('Update user failed:', err);
             res.status(500).json({ error: friendlySqlError(err) });
         }
     }
@@ -696,280 +568,192 @@ app.delete('/api/users/:id', requireSuperAdmin, async (req, res) => {
 app.post('/api/damage-reports', requireAuth, async (req, res) => {
     console.log('Damage report request received:', req.body);
     
-    const item_id = toNullableString(req.body.item_id);
-    const damage_type = toNullableString(req.body.damage_type);
-    const severity = toNullableString(req.body.severity);
-    const description = toNullableString(req.body.description);
-    const reported_by = toNullableString(req.body.reported_by);
-    const damage_date = toNullableString(req.body.damage_date);
-    const estimated_cost = req.body.estimated_cost ? parseFloat(req.body.estimated_cost) : null;
-    const repair_notes = toNullableString(req.body.repair_notes);
-    const id = uuidv4();
-    
-    console.log('Processed damage report data:', {
-        id, item_id, damage_type, severity, description, reported_by, damage_date, estimated_cost, repair_notes
-    });
-    
-    try {
-        const pool = await getPool();
-        
-        // Insert damage report
-        console.log('Inserting damage report into database...');
-        await pool.query(`INSERT INTO damage_reports (id, item_id, damage_type, severity, description, reported_by, damage_date, estimated_cost, repair_notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, 
-                    [id, item_id, damage_type, severity, description, reported_by, damage_date, estimated_cost, repair_notes]);
-        
-        // Update inventory item condition to 'damaged'
-        console.log('Updating inventory item condition...');
-        await pool.query(`UPDATE inventory_items SET \`condition\` = 'damaged' WHERE id = ?`, [item_id]);
-        
-        console.log('Damage report created successfully');
-        res.json({ 
-            message: 'Damage report submitted successfully', 
-            id,
+    const {
             item_id,
             damage_type,
             severity,
             description,
             reported_by,
             damage_date,
-            estimated_cost,
+        estimated_repair_cost,
             repair_notes
+    } = req.body;
+
+    // Validate required fields
+    if (!item_id || !damage_type || !severity || !description || !reported_by || !damage_date) {
+        return res.status(400).json({ 
+            error: 'Missing required fields',
+            required: ['item_id', 'damage_type', 'severity', 'description', 'reported_by', 'damage_date']
         });
+    }
+
+    try {
+        const pool = await getPool();
+        
+        // Start transaction
+        await pool.query('START TRANSACTION');
+        
+        try {
+            // Insert damage report
+            const [result] = await pool.query(`
+                INSERT INTO damage_reports 
+                (item_id, damage_type, severity, description, reported_by, damage_status, damage_date, reported_date, estimated_repair_cost, repair_notes)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?, CURDATE(), ?, ?)
+            `, [item_id, damage_type, severity, description, reported_by, damage_date, estimated_repair_cost || null, repair_notes || null]);
+
+            console.log('Damage report inserted with ID:', result.insertId);
+
+            // Update inventory item condition to 'damaged'
+            await pool.query(`
+                UPDATE inventory_items 
+                SET \`condition\` = 'damaged'
+                WHERE id = ?
+            `, [item_id]);
+
+            console.log('Inventory item condition updated to damaged');
+
+            // Commit transaction
+            await pool.query('COMMIT');
+            
+            res.json({ 
+                id: result.insertId, 
+                message: 'Damage report submitted successfully' 
+            });
+        } catch (error) {
+            // Rollback on error
+            await pool.query('ROLLBACK');
+            throw error;
+        }
     } catch (err) {
-        console.error('Create damage report failed:', err);
-        console.error('Error details:', {
-            code: err.code,
-            errno: err.errno,
-            sqlState: err.sqlState,
-            sqlMessage: err.sqlMessage
-        });
-        res.status(500).json({ error: friendlySqlError(err) });
+        console.error('Error creating damage report:', err);
+        res.status(500).json({ error: err.message });
     }
 });
 
-app.get('/api/damage-reports', requireAuth, async (req, res) => {
+app.get('/api/damage-reports', requireSuperAdmin, async (req, res) => {
     try {
         const pool = await getPool();
         const [rows] = await pool.query(`
-            SELECT dr.*, ii.name as item_name, ii.category, r.room_number, r.room_type, hu.name as housing_unit_name
+            SELECT 
+                dr.*,
+                i.name as item_name,
+                i.category,
+                i.condition as item_condition,
+                r.room_number,
+                r.room_type,
+                hu.name as housing_unit_name
             FROM damage_reports dr
-            JOIN inventory_items ii ON dr.item_id = ii.id
-            JOIN rooms r ON ii.room_id = r.id
-            JOIN housing_units hu ON r.housing_unit_id = hu.id
-            ORDER BY dr.created_at DESC
+            LEFT JOIN inventory_items i ON dr.item_id = i.id
+            LEFT JOIN rooms r ON i.room_id = r.id
+            LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
+            ORDER BY dr.reported_date DESC
         `);
         res.json(rows);
     } catch (err) {
-        console.error('Get damage reports failed:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
-app.put('/api/damage-reports/:id', requireSuperAdmin, async (req, res) => {
-    const { status } = req.body;
-    const reportId = req.params.id;
-    
-    if (!status || !['pending', 'in_progress', 'resolved'].includes(status)) {
-        return res.status(400).json({ error: 'Invalid status. Must be pending, in_progress, or resolved' });
-    }
-    
-    try {
-        const pool = await getPool();
-        
-        // Update damage report status
-        await pool.query('UPDATE damage_reports SET status = ? WHERE id = ?', [status, reportId]);
-        
-        // Get the item_id from the damage report
-        const [reportRows] = await pool.query('SELECT item_id FROM damage_reports WHERE id = ?', [reportId]);
-        if (reportRows.length > 0) {
-            const itemId = reportRows[0].item_id;
-            
-            // Update inventory item condition based on status
-            let newCondition = 'damaged'; // default
-            if (status === 'resolved') {
-                newCondition = 'good'; // item is fixed
-            } else if (status === 'in_progress') {
-                newCondition = 'repairing'; // item is being repaired
-            }
-            
-            await pool.query('UPDATE inventory_items SET `condition` = ? WHERE id = ?', [newCondition, itemId]);
-        }
-        
-        res.json({ message: 'Damage report status updated successfully' });
-    } catch (err) {
-        console.error('Update damage report status failed:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
+app.put('/api/damage-reports/:id/status', requireSuperAdmin, async (req, res) => {
+    const { status, resolution_notes } = req.body;
+    const id = req.params.id;
 
-// Profile Management Endpoints
-app.get('/api/profile', requireAuth, async (req, res) => {
-    try {
-        console.log('Profile request - session user:', req.session.user);
-        const pool = await getPool();
-        const [rows] = await pool.query('SELECT id, username, role, email FROM users WHERE id = ?', [req.session.user.id]);
-        
-        if (rows.length === 0) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-        
-        res.json(rows[0]);
-    } catch (err) {
-        console.error('Get profile failed:', err);
-        res.status(500).json({ error: err.message });
+    if (!status) {
+        return res.status(400).json({ error: 'Status is required' });
     }
-});
 
-app.put('/api/profile/username', requireAuth, async (req, res) => {
-    console.log('Username update request - session user:', req.session.user);
-    console.log('Request body:', req.body);
-    
-    const { newUsername, confirmUsername } = req.body;
-    
-    if (!newUsername || !confirmUsername) {
-        return res.status(400).json({ error: 'New username and confirmation are required' });
-    }
-    
-    if (newUsername !== confirmUsername) {
-        return res.status(400).json({ error: 'Username confirmation does not match' });
-    }
-    
-    if (newUsername.length < 3) {
-        return res.status(400).json({ error: 'Username must be at least 3 characters long' });
-    }
-    
     try {
         const pool = await getPool();
         
-        // Check if username already exists
-        const [existing] = await pool.query('SELECT id FROM users WHERE username = ? AND id != ?', [newUsername, req.session.user.id]);
-        if (existing.length > 0) {
-            return res.status(400).json({ error: 'Username already exists' });
-        }
-        
-        // Start transaction to ensure data integrity
+        // Start transaction
         await pool.query('START TRANSACTION');
         
         try {
-            // Update username
-            await pool.query('UPDATE users SET username = ? WHERE id = ?', [newUsername, req.session.user.id]);
-            
-            // Verify the update was successful
-            const [verifyRows] = await pool.query('SELECT username FROM users WHERE id = ?', [req.session.user.id]);
-            if (verifyRows.length === 0 || verifyRows[0].username !== newUsername) {
-                throw new Error('Username update verification failed');
+            // Get the damage report to find the associated item
+            const [damageReports] = await pool.query(
+                'SELECT item_id FROM damage_reports WHERE id = ?',
+                [id]
+            );
+
+            if (damageReports.length === 0) {
+                await pool.query('ROLLBACK');
+                return res.status(404).json({ error: 'Damage report not found' });
             }
+
+            const itemId = damageReports[0].item_id;
+
+            // Update damage report status
+            await pool.query(
+                'UPDATE damage_reports SET damage_status = ?, resolution_notes = ?, resolved_date = CASE WHEN ? = "resolved" THEN NOW() ELSE NULL END WHERE id = ?',
+                [status, resolution_notes || null, status, id]
+            );
+
+            // Update inventory item condition based on status
+            let newCondition = 'damaged';
+            if (status === 'in_progress') {
+                newCondition = 'repairing';
+            } else if (status === 'resolved') {
+                newCondition = 'good';
+            }
+
+            await pool.query(
+                'UPDATE inventory_items SET `condition` = ? WHERE id = ?',
+                [newCondition, itemId]
+            );
             
             // Commit transaction
             await pool.query('COMMIT');
             
-            // Update session with new username
-            req.session.user.username = newUsername;
-            
-            res.json({ message: 'Username updated successfully', username: newUsername });
+            res.json({ message: 'Damage report status updated successfully' });
         } catch (error) {
-            // Rollback transaction on error
+            // Rollback on error
             await pool.query('ROLLBACK');
             throw error;
         }
     } catch (err) {
-        console.error('Update username failed:', err);
+        console.error('Error updating damage report status:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
-app.put('/api/profile/password', requireAuth, async (req, res) => {
-    console.log('Password update request - session user:', req.session.user);
-    console.log('Request body:', req.body);
+// Change Password (for current user)
+app.put('/api/change-password', requireAuth, async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
     
-    const { currentPassword, newPassword, confirmPassword } = req.body;
-    
-    console.log('Password fields:', { 
-        currentPassword: currentPassword ? 'provided' : 'missing', 
-        newPassword: newPassword ? 'provided' : 'missing', 
-        confirmPassword: confirmPassword ? 'provided' : 'missing' 
-    });
-    
-    if (!currentPassword || !newPassword || !confirmPassword) {
-        console.log('Missing password fields');
-        return res.status(400).json({ error: 'All password fields are required' });
-    }
-    
-    if (newPassword !== confirmPassword) {
-        console.log('Password confirmation does not match');
-        return res.status(400).json({ error: 'Password confirmation does not match' });
-    }
-    
-    if (newPassword.length < 6) {
-        console.log('Password too short:', newPassword.length);
-        return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+    if (!currentPassword || !newPassword) {
+        return res.status(400).json({ error: 'Current password and new password are required' });
     }
     
     try {
         const pool = await getPool();
-        
-        // Start transaction to ensure data integrity
-        await pool.query('START TRANSACTION');
-        
-        try {
-            // Get current user data
             const [rows] = await pool.query('SELECT password_hash FROM users WHERE id = ?', [req.session.user.id]);
+        
             if (rows.length === 0) {
-                await pool.query('ROLLBACK');
                 return res.status(404).json({ error: 'User not found' });
             }
             
-            // Verify current password
             const isValidPassword = await bcrypt.compare(currentPassword, rows[0].password_hash);
+        
             if (!isValidPassword) {
-                await pool.query('ROLLBACK');
-                return res.status(400).json({ error: 'Current password is incorrect' });
-            }
-            
-            // Hash new password
-            const hashedPassword = await bcrypt.hash(newPassword, 10);
-            
-            // Update password
-            await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hashedPassword, req.session.user.id]);
-            
-            // Verify the update was successful
-            const [verifyRows] = await pool.query('SELECT password_hash FROM users WHERE id = ?', [req.session.user.id]);
-            if (verifyRows.length === 0) {
-                throw new Error('Password update verification failed');
-            }
-            
-            // Test the new password hash
-            const testPassword = await bcrypt.compare(newPassword, verifyRows[0].password_hash);
-            if (!testPassword) {
-                throw new Error('New password hash verification failed');
-            }
-            
-            // Commit transaction
-            await pool.query('COMMIT');
-            
-            res.json({ message: 'Password updated successfully' });
-        } catch (error) {
-            // Rollback transaction on error
-            await pool.query('ROLLBACK');
-            throw error;
+            return res.status(401).json({ error: 'Current password is incorrect' });
         }
+
+        const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+        await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hashedNewPassword, req.session.user.id]);
+        
+        res.json({ message: 'Password changed successfully' });
     } catch (err) {
-        console.error('Update password failed:', err);
+        console.error('Error changing password:', err);
         res.status(500).json({ error: err.message });
     }
 });
 
-// Password recovery endpoint for super admins only
-app.post('/api/admin/reset-password', requireSuperAdmin, async (req, res) => {
-    const { targetUserId, newPassword } = req.body;
+// Super admin reset any user's password
+app.put('/api/admin/reset-password', requireSuperAdmin, async (req, res) => {
+    const { username, newPassword } = req.body;
     
-    if (!targetUserId || !newPassword) {
-        return res.status(400).json({ error: 'Target user ID and new password are required' });
-    }
-    
-    if (newPassword.length < 6) {
-        return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+    if (!username || !newPassword) {
+        return res.status(400).json({ error: 'Username and new password are required' });
     }
     
     try {
@@ -979,30 +763,18 @@ app.post('/api/admin/reset-password', requireSuperAdmin, async (req, res) => {
         await pool.query('START TRANSACTION');
         
         try {
-            // Check if target user exists
-            const [userRows] = await pool.query('SELECT id, username FROM users WHERE id = ?', [targetUserId]);
+            // Check if user exists
+            const [userRows] = await pool.query('SELECT id, username, role FROM users WHERE username = ?', [username]);
             if (userRows.length === 0) {
                 await pool.query('ROLLBACK');
-                return res.status(404).json({ error: 'Target user not found' });
+                return res.status(404).json({ error: 'User not found' });
             }
             
             // Hash new password
-            const hashedPassword = await bcrypt.hash(newPassword, 10);
+            const hashedNewPassword = await bcrypt.hash(newPassword, 10);
             
             // Update password
-            await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hashedPassword, targetUserId]);
-            
-            // Verify the update
-            const [verifyRows] = await pool.query('SELECT password_hash FROM users WHERE id = ?', [targetUserId]);
-            if (verifyRows.length === 0) {
-                throw new Error('Password reset verification failed');
-            }
-            
-            // Test the new password hash
-            const testPassword = await bcrypt.compare(newPassword, verifyRows[0].password_hash);
-            if (!testPassword) {
-                throw new Error('New password hash verification failed');
-            }
+            await pool.query('UPDATE users SET password_hash = ? WHERE username = ?', [hashedNewPassword, username]);
             
             // Commit transaction
             await pool.query('COMMIT');
@@ -1088,59 +860,405 @@ app.get('/api/session-check', (req, res) => {
     }
 });
 
-// Clear session endpoint
-app.post('/api/clear-session', (req, res) => {
-    req.session.destroy((err) => {
-        if (err) {
-            res.status(500).json({ error: 'Could not clear session' });
-        } else {
-            res.json({ message: 'Session cleared' });
-        }
-    });
-});
-
-// Debug endpoint to check current usernames
-app.get('/api/debug/users', async (req, res) => {
+// Generate PDF Report Route
+app.get('/api/generate-report', requireAuth, async (req, res) => {
+    let browser = null;
     try {
+        console.log('Starting PDF generation...');
         const pool = await getPool();
-        const [rows] = await pool.query('SELECT username, role FROM users WHERE role IN ("admin", "super_admin")');
-        res.json(rows);
+        const housingUnitId = req.query.housing_unit_id || '';
+        
+        // Build WHERE clause for housing unit filter
+        const housingFilter = housingUnitId ? 'WHERE hu.id = ?' : '';
+        const housingFilterWithAnd = housingUnitId ? 'AND hu.id = ?' : '';
+        const filterParams = housingUnitId ? [housingUnitId] : [];
+        
+        console.log(`Generating report for housing unit: ${housingUnitId || 'ALL'}`);
+        
+        // Get rooms with occupant info
+        console.log('Fetching rooms data...');
+        const roomsQuery = `
+            SELECT 
+                r.*,
+                hu.name as housing_unit_name,
+                hu.address,
+                e.name as occupant_name,
+                e.employee_id as occupant_id,
+                e.department as occupant_department,
+                e.position as occupant_position,
+                e.email as occupant_email,
+                e.phone as occupant_phone
+            FROM rooms r
+            LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
+            LEFT JOIN employees e ON r.id = e.assigned_room_id AND e.status = 'active'
+            ${housingFilter}
+            ORDER BY hu.name, r.room_number
+        `;
+        const [roomsData] = await pool.query(roomsQuery, filterParams);
+        console.log(`Fetched ${roomsData.length} rooms`);
+
+        // Get inventory data
+        console.log('Fetching inventory data...');
+        const inventoryQuery = `
+            SELECT 
+                i.*,
+                r.room_number,
+                r.room_type,
+                hu.name as housing_unit_name
+            FROM inventory_items i
+            LEFT JOIN rooms r ON i.room_id = r.id
+            LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
+            ${housingFilter}
+            ORDER BY hu.name, r.room_number, i.category, i.name
+        `;
+        const [inventoryData] = await pool.query(inventoryQuery, filterParams);
+        console.log(`Fetched ${inventoryData.length} inventory items`);
+
+        // Get damage reports data
+        console.log('Fetching damage reports...');
+        const damageQuery = `
+            SELECT 
+                dr.*,
+                i.name as item_name,
+                i.category,
+                r.room_number,
+                r.room_type,
+                hu.name as housing_unit_name
+            FROM damage_reports dr
+            LEFT JOIN inventory_items i ON dr.item_id = i.id
+            LEFT JOIN rooms r ON i.room_id = r.id
+            LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
+            ${housingFilter}
+            ORDER BY dr.reported_date DESC
+        `;
+        const [damageData] = await pool.query(damageQuery, filterParams);
+        console.log(`Fetched ${damageData.length} damage reports`);
+
+        // Get housing unit name if filtered
+        let housingUnitName = 'All Housing Units';
+        if (housingUnitId && roomsData.length > 0) {
+            housingUnitName = roomsData[0].housing_unit_name;
+        }
+
+        // Generate HTML
+        console.log('Generating HTML...');
+        const html = generateReportHTML(roomsData, inventoryData, damageData, housingUnitName);
+        console.log('HTML generated successfully, length:', html.length);
+
+        // Launch Puppeteer
+        console.log('Launching Puppeteer...');
+        browser = await puppeteer.launch({
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        console.log('Puppeteer launched');
+        
+        const page = await browser.newPage();
+        console.log('Setting page content...');
+        await page.setContent(html, { waitUntil: 'networkidle0' });
+        console.log('Page content set');
+        
+        // Generate PDF
+        console.log('Generating PDF...');
+        const pdf = await page.pdf({
+            format: 'A4',
+            landscape: true,
+            printBackground: true,
+            margin: {
+                top: '0.5cm',
+                right: '0.5cm',
+                bottom: '0.5cm',
+                left: '0.5cm'
+            }
+        });
+        console.log('PDF generated, size:', pdf.length, 'bytes');
+        
+        await browser.close();
+        browser = null;
+        console.log('Browser closed');
+            
+        // Send PDF
+        res.contentType('application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=estate-report-${new Date().toISOString().split('T')[0]}.pdf`);
+        res.send(pdf);
+        console.log('PDF sent successfully');
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error('=== ERROR GENERATING REPORT ===');
+        console.error('Error type:', err.name);
+        console.error('Error message:', err.message);
+        console.error('Error stack:', err.stack);
+        
+        if (browser) {
+            try {
+                await browser.close();
+                console.log('Browser closed after error');
+            } catch (closeErr) {
+                console.error('Error closing browser:', closeErr.message);
+            }
+        }
+        
+        res.status(500).json({ 
+            error: 'Failed to generate report',
+            details: err.message,
+            type: err.name
+        });
     }
 });
 
-// Serve the main page
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
+// Helper function to generate HTML report in clean table format
+function generateReportHTML(roomsData, inventoryData, damageData, housingUnitName = 'All Housing Units') {
+    const currentDate = new Date().toLocaleDateString();
+    const currentDateTime = new Date().toLocaleString();
+    
+    // Read and convert logo to base64
+    let logoBase64 = '';
+    try {
+        const logoPath = path.join(__dirname, 'Asset', 'HTH logo.jpeg');
+        const logoBuffer = fs.readFileSync(logoPath);
+        logoBase64 = `data:image/jpeg;base64,${logoBuffer.toString('base64')}`;
+    } catch (err) {
+        console.error('Error reading logo:', err);
+    }
+    
+    // Calculate statistics
+    const stats = {
+        totalRooms: roomsData.length,
+        occupiedRooms: roomsData.filter(r => r.occupant_name).length,
+        vacantRooms: roomsData.filter(r => !r.occupant_name).length,
+        totalItems: inventoryData.length,
+        goodItems: inventoryData.filter(i => i.condition === 'good').length,
+        damagedItems: inventoryData.filter(i => i.condition === 'damaged' || i.condition === 'poor').length,
+        totalDamageReports: damageData.length,
+        pendingReports: damageData.filter(d => d.damage_status === 'pending').length
+    };
 
-// Dashboard redirect route
-app.get('/dashboard', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
+    return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>HTH Estate Management Report</title>
+        <style>
+            @page {
+                margin: 1cm;
+                size: A4 portrait;
+            }
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            body {
+                font-family: Arial, Helvetica, sans-serif;
+                font-size: 11px;
+                color: #000;
+                line-height: 1.4;
+            }
+            .logo-container {
+                text-align: center;
+                margin-bottom: 15px;
+            }
+            .logo-img {
+                width: 80px;
+                height: 80px;
+                object-fit: contain;
+            }
+            .report-title {
+                text-align: center;
+                margin-bottom: 20px;
+            }
+            .report-title h1 {
+                font-size: 20px;
+                margin-bottom: 5px;
+                text-transform: uppercase;
+            }
+            .report-title h2 {
+                font-size: 14px;
+                color: #555;
+                font-weight: normal;
+            }
+            .report-meta {
+                margin-bottom: 15px;
+                font-size: 10px;
+            }
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-bottom: 20px;
+            }
+            th, td {
+                border: 1px solid #333;
+                padding: 8px;
+                text-align: left;
+            }
+            th {
+                background-color: #e0e0e0;
+                font-weight: bold;
+                text-align: center;
+            }
+            .section-title {
+                background-color: #d0d0d0;
+                font-weight: bold;
+                padding: 10px;
+                margin-top: 15px;
+                margin-bottom: 10px;
+                border: 1px solid #333;
+                text-transform: uppercase;
+                font-size: 12px;
+            }
+            .center {
+                text-align: center;
+            }
+            .right {
+                text-align: right;
+            }
+            .stats-table td {
+                font-weight: bold;
+            }
+            .footer {
+                text-align: center;
+                margin-top: 20px;
+                font-size: 9px;
+                color: #666;
+                border-top: 1px solid #ccc;
+                padding-top: 10px;
+            }
+        </style>
+    </head>
+    <body>
+        <!-- Logo -->
+        ${logoBase64 ? `
+        <div class="logo-container">
+            <img src="${logoBase64}" class="logo-img" alt="HTH Logo" />
+        </div>
+        ` : ''}
+        
+        <!-- Report Title -->
+        <div class="report-title">
+            <h1>HTH Estate Management</h1>
+            <h2>Comprehensive Estate Report</h2>
+            ${housingUnitName !== 'All Housing Units' ? `<h3 style="color: #666; font-size: 12px; margin-top: 5px;">Housing Unit: ${housingUnitName}</h3>` : ''}
+        </div>
+        
+        <!-- Report Metadata -->
+        <div class="report-meta">
+            <strong>Report Date:</strong> ${currentDate} | <strong>Generated:</strong> ${currentDateTime} | <strong>Scope:</strong> ${housingUnitName}
+        </div>
+        
+        <!-- Summary Statistics -->
+        <div class="section-title">Executive Summary</div>
+        <table class="stats-table">
+            <tr>
+                <th>Total Rooms</th>
+                <th>Occupied</th>
+                <th>Vacant</th>
+                <th>Total Items</th>
+                <th>Good Condition</th>
+                <th>Damaged</th>
+            </tr>
+            <tr class="center">
+                <td>${stats.totalRooms}</td>
+                <td>${stats.occupiedRooms}</td>
+                <td>${stats.vacantRooms}</td>
+                <td>${stats.totalItems}</td>
+                <td>${stats.goodItems}</td>
+                <td>${stats.damagedItems}</td>
+            </tr>
+        </table>
+        
+        <!-- Rooms Table -->
+        <div class="section-title">Room Occupancy Details</div>
+        <table>
+            <tr>
+                <th>No.</th>
+                <th>Housing Unit</th>
+                <th>Room Number</th>
+                <th>Room Type</th>
+                <th>Status</th>
+                <th>Occupant Name</th>
+                <th>Employee ID</th>
+                <th>Department</th>
+            </tr>
+            ${roomsData.map((room, index) => `
+            <tr>
+                <td class="center">${index + 1}</td>
+                <td>${room.housing_unit_name || 'N/A'}</td>
+                <td class="center">${room.room_number || 'N/A'}</td>
+                <td>${room.room_type || 'N/A'}</td>
+                <td class="center">${room.occupant_name ? 'Occupied' : 'Vacant'}</td>
+                <td>${room.occupant_name || '-'}</td>
+                <td class="center">${room.occupant_id || '-'}</td>
+                <td>${room.occupant_department || '-'}</td>
+            </tr>
+            `).join('')}
+        </table>
+        
+        <!-- Inventory Table -->
+        <div class="section-title">Inventory Items</div>
+        <table>
+            <tr>
+                <th>No.</th>
+                <th>Housing Unit</th>
+                <th>Room</th>
+                <th>Item Name</th>
+                <th>Category</th>
+                <th>Quantity</th>
+                <th>Condition</th>
+            </tr>
+            ${inventoryData.map((item, index) => `
+            <tr>
+                <td class="center">${index + 1}</td>
+                <td>${item.housing_unit_name || 'N/A'}</td>
+                <td class="center">${item.room_number || 'N/A'}</td>
+                <td>${item.name}</td>
+                <td>${item.category}</td>
+                <td class="center">${item.quantity}</td>
+                <td class="center" style="text-transform: capitalize;">${item.condition}</td>
+            </tr>
+            `).join('')}
+        </table>
+        
+        ${damageData.length > 0 ? `
+        <!-- Damage Reports Table -->
+        <div class="section-title">Damage Reports</div>
+        <table>
+            <tr>
+                <th>No.</th>
+                <th>Item Name</th>
+                <th>Room</th>
+                <th>Damage Type</th>
+                <th>Severity</th>
+                <th>Reported By</th>
+                <th>Date</th>
+                <th>Status</th>
+            </tr>
+            ${damageData.map((report, index) => `
+            <tr>
+                <td class="center">${index + 1}</td>
+                <td>${report.item_name || 'N/A'}</td>
+                <td class="center">${report.room_number || 'N/A'}</td>
+                <td>${report.damage_type}</td>
+                <td class="center" style="text-transform: capitalize;">${report.severity}</td>
+                <td>${report.reported_by}</td>
+                <td class="center">${report.reported_date || report.damage_date || 'N/A'}</td>
+                <td class="center" style="text-transform: capitalize;">${report.damage_status}</td>
+            </tr>
+            `).join('')}
+        </table>
+        ` : ''}
+        
+        <!-- Footer -->
+        <div class="footer">
+            Generated on ${currentDateTime} | HTH Estate Management System<br/>
+            This is a computer-generated report and does not require a signature
+        </div>
+    </body>
+    </html>
+    `;
+}
 
 // Start server
-initSchema().then(() => {
 app.listen(PORT, () => {
-    console.log(`HTH Estate Management Server running on port ${PORT}`);
-    console.log(`Visit http://localhost:${PORT} to access the application`);
-    });
-}).catch(err => {
-    console.error('Failed to initialize database schema:', err);
-    process.exit(1);
+    console.log(`Server running on http://localhost:${PORT}`);
 });
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
-    console.log('\nShutting down server...');
-    try {
-        const pool = await getPool();
-        await pool.end();
-        console.log('MySQL pool ended.');
-    } catch (e) {
-        console.error('Error ending MySQL pool:', e.message);
-    } finally {
-        process.exit(0);
-    }
-});

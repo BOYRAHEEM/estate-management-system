@@ -327,6 +327,35 @@ async function initSchema() {
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             CONSTRAINT FK_employees_room FOREIGN KEY (assigned_room_id) REFERENCES rooms (id) ON DELETE SET NULL ON UPDATE CASCADE,
             INDEX idx_employees_assigned_room_id (assigned_room_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
+        `CREATE TABLE IF NOT EXISTS users (
+            id VARCHAR(50) NOT NULL PRIMARY KEY,
+            username VARCHAR(100) NOT NULL UNIQUE,
+            password_hash VARCHAR(255) NOT NULL,
+            role VARCHAR(50) NOT NULL DEFAULT 'admin',
+            full_name VARCHAR(255) NULL,
+            email VARCHAR(255) NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`,
+        `CREATE TABLE IF NOT EXISTS damage_reports (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            item_id VARCHAR(50) NOT NULL,
+            damage_type VARCHAR(100) NOT NULL,
+            severity VARCHAR(50) NOT NULL,
+            description TEXT NULL,
+            reported_by VARCHAR(255) NOT NULL,
+            damage_status VARCHAR(50) DEFAULT 'pending',
+            damage_date DATE NULL,
+            reported_date DATE NULL,
+            estimated_repair_cost DECIMAL(10,2) NULL,
+            repair_notes TEXT NULL,
+            resolution_notes TEXT NULL,
+            resolved_date DATETIME NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            CONSTRAINT FK_damage_item FOREIGN KEY (item_id) REFERENCES inventory_items (id) ON DELETE CASCADE ON UPDATE CASCADE,
+            INDEX idx_damage_item_id (item_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`
     ];
     for (const stmt of ddlStatements) {
