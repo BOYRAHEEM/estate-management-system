@@ -1,132 +1,146 @@
-# HTH Estate Management System - Quick Start Guide
+# HTH Estate Management - Quick Start Guide
 
-## 🚀 Quick Setup (Windows)
+## 🚀 Get Started in 5 Minutes
 
-1. **Double-click `start.bat`** - This will automatically:
-   - Install dependencies
-   - Set up sample data
-   - Start the server
-
-2. **Open your browser** and go to: `http://localhost:3000`
-
-## 🚀 Quick Setup (Mac/Linux)
-
-1. **Run the setup script**:
-   ```bash
-   chmod +x start.sh
-   ./start.sh
-   ```
-
-2. **Open your browser** and go to: `http://localhost:3000`
-
-## 🚀 Manual Setup
-
-1. **Install dependencies**:
-   ```bash
-   npm install
-   ```
-
-2. **Add sample data**:
-   ```bash
-   npm run sample-data
-   ```
-
-3. **Start the server**:
-   ```bash
-   npm start
-   ```
-
-4. **Open your browser** and go to: `http://localhost:3000`
-
-## 📋 What You'll See
-
-The system comes pre-loaded with sample data including:
-
-- **6 Housing Units** across 3 types:
-  - HTH Bangalore (2 blocks)
-  - Rental Apartments (2 buildings)
-  - Housement Flats (2 buildings)
-
-- **15 Rooms** with different types:
-  - Single, Double, Triple occupancy
-  - Studio, 1BHK apartments
-  - Various statuses (Available, Occupied, Maintenance)
-
-- **6 Inventory Items** including:
-  - Furniture (beds, tables, wardrobes)
-  - Electronics (TVs, fans, lights)
-  - Appliances (AC, refrigerator, microwave)
-
-- **6 Sample Employees** from different departments:
-  - Doctors (Cardiology, Pediatrics, Orthopedics, Neurology)
-  - Nurses (Emergency, ICU)
-
-## 🎯 Key Features
-
-### Dashboard
-- Real-time statistics
-- Recent housing units
-- Housing type distribution
-
-### Housing Management
-- Add/Edit/Delete housing units
-- Filter by type and search
-- Track capacity and status
-
-### Inventory Management
-- Room-based inventory tracking
-- Item categories and conditions
-- Purchase dates and warranties
-
-### Employee Management
-- Complete employee profiles
-- Room assignments
-- Department and position tracking
-
-## 🔧 Adding New Housing Types
-
-The system is designed to be extensible. To add new housing types:
-
-1. **Via Database**: Insert directly into the `housing_types` table
-2. **Via API**: Use POST `/api/housing-types`
-3. **Via Code**: Modify the `defaultHousingTypes` array in `server.js`
-
-## 🛠️ Troubleshooting
-
-### Port Already in Use
+### Installation
 ```bash
-# Change port
-PORT=3001 npm start
-```
+# 1. Install dependencies
+npm install
 
-### Reset Database
-```bash
-# Delete database file and restart
-rm estate_management.db
-npm run sample-data
+# 2. Create database
+mysql -u root -p
+CREATE DATABASE hospital_estate;
+exit;
+
+# 3. Initialize database
+node sample-data.js
+
+# 4. Start server
 npm start
 ```
 
-### Dependencies Issues
-```bash
-# Clean install
-rm -rf node_modules package-lock.json
-npm install
+### Access the Application
+Open your browser and navigate to: **http://localhost:3000**
+
+### Default Login Credentials
+
+**Super Admin:**
+```
+Username: superadmin
+Password: admin123
 ```
 
-## 📱 Browser Compatibility
+**Regular Admin:**
+```
+Username: test
+Password: admin123
+```
 
-- Chrome 60+
-- Firefox 55+
-- Safari 12+
-- Edge 79+
+⚠️ **Change these passwords immediately after first login!**
 
-## 🎨 Customization
+## 📋 Quick Feature Overview
 
-- **Colors**: Modify CSS custom properties in `styles.css`
-- **Housing Types**: Add new types in `server.js`
-- **Categories**: Extend inventory categories as needed
+### For Super Admins
+
+**User Management:**
+- Burger menu (☰) → User Management
+- Create, edit, delete users
+- Reset passwords
+
+**Full Access:**
+- All inventory operations (including delete)
+- View damage reports page
+- System settings
+
+### For Regular Admins
+
+**Daily Tasks:**
+- Manage housing units and rooms
+- Add/edit inventory items
+- Report damaged items
+- Assign employees to rooms
+- Generate PDF reports
+
+## 🎯 Common Tasks
+
+### Add a New Housing Unit
+1. Click **"Housing Units"**
+2. Click **"+ Add Housing Unit"**
+3. Fill in: Name, Address, Type, Total Rooms
+4. Click **"Save"**
+
+### Add Inventory to a Room
+1. Go to **"Inventory"**
+2. Expand the room section
+3. Click **"Add item"** button
+4. Fill in item details
+5. Click **"Save"** (or "Save & Add Another")
+
+### Report Damage
+1. Find item in **"Inventory"**
+2. Click three dots (⋮) → **"Report Damage"**
+3. Select damage type and severity
+4. Add description
+5. Submit
+
+### Generate a Report
+1. Click **"Generate Reports"**
+2. Select report type:
+   - Full Report
+   - Rooms Only
+   - Inventory Only
+   - Damage Reports Only (styled)
+3. Choose housing unit
+4. Click **"Generate"**
+
+## 🔑 Keyboard Shortcuts
+
+- `Esc` - Close modal/dialog
+- `Enter` - Submit form (when focused)
+- `Ctrl + Shift + R` - Hard refresh (clear cache)
+
+## 📊 Understanding the Dashboard
+
+**Key Metrics:**
+- **Compliance Rate** - Overall system health
+- **Total Rooms** - Number of rooms in system
+- **Total Inventory** - Number of items tracked
+- **Damage Reports** - Active damage reports
+
+**Color Codes:**
+- 🟢 Green - Good/Resolved
+- 🟠 Orange - Moderate/In Progress
+- 🔴 Red - Severe/Pending
+
+## ⚠️ Common Issues
+
+### "Changes not showing?"
+**Solution:** Hard refresh your browser
+- Chrome/Edge: `Ctrl + Shift + R`
+- Firefox: `Ctrl + F5`
+
+### "Can't delete inventory item?"
+**Solution:** Only Super Admins can delete inventory items. Regular admins can only edit.
+
+### "Already Reported" message?
+**Solution:** Item has an active damage report. Wait for it to be resolved before reporting again.
+
+### "Room already assigned" error?
+**Solution:** Room is already occupied. Choose a different room or unassign the current occupant.
+
+## 📞 Need Help?
+
+Check the full [README.md](README.md) for detailed documentation.
+
+**Contact:**  
+Developer: A. Rahim  
+Email: boyraheem@icloud.com
 
 ---
 
-**Ready to manage your hospital estate!** 🏥✨
+**Quick Tips:**
+- Always use hard refresh after server updates
+- Super admins: Use burger menu (☰) for admin tools
+- Regular admins: Focus on inventory and damage reporting
+- Generate reports regularly for recordkeeping
+- Change default passwords immediately!

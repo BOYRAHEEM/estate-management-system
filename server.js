@@ -13,6 +13,15 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(express.json());
+
+// Disable caching for all static files to ensure updates are loaded
+app.use((req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+});
+
 app.use(express.static(path.join(__dirname)));
 
 //Session configuration
@@ -28,13 +37,17 @@ const sessionStore = new MySQLStore({
 });
 
 app.use(session({
-    key: 'session_cookie_name',
+    key: 'hth_estate_session',
     secret: 'your-secret-key-change-in-production',
     store: sessionStore,
     resave: false,
     saveUninitialized: false,
+    rolling: true, // Reset expiration on every request
     cookie: {
-        maxAge: 1000 * 60 * 60 * 24 // 24 hours
+        maxAge: 1000 * 60 * 60 * 24, // 24 hours
+        httpOnly: true,
+        secure: false, // Set to true in production with HTTPS
+        sameSite: 'lax'
     }
 }));
 
@@ -135,6 +148,21 @@ app.post('/api/login', async (req, res) => {
 app.post('/api/logout', (req, res) => {
     req.session.destroy();
     res.json({ message: 'Logged out' });
+});
+
+// Check authentication status
+app.get('/api/auth/me', (req, res) => {
+    if (req.session && req.session.user) {
+        res.json({ 
+            authenticated: true,
+            user: req.session.user 
+        });
+    } else {
+        res.status(401).json({ 
+            authenticated: false,
+            message: 'Not authenticated' 
+        });
+    }
 });
 
 // Get current user
@@ -630,9 +658,12 @@ app.post('/api/damage-reports', requireAuth, async (req, res) => {
     }
 });
 
-app.get('/api/damage-reports', requireSuperAdmin, async (req, res) => {
+app.get('/api/damage-reports', requireAuth, async (req, res) => {
+    console.log('Damage reports endpoint called');
+    console.log('Session user:', req.session.user);
     try {
         const pool = await getPool();
+        console.log('Executing damage reports query...');
         const [rows] = await pool.query(`
             SELECT 
                 dr.*,
@@ -648,8 +679,10 @@ app.get('/api/damage-reports', requireSuperAdmin, async (req, res) => {
             LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
             ORDER BY dr.reported_date DESC
         `);
+        console.log(`Found ${rows.length} damage reports`);
         res.json(rows);
     } catch (err) {
+        console.error('Error in damage reports endpoint:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -866,6 +899,7 @@ app.get('/api/generate-report', requireAuth, async (req, res) => {
     try {
         console.log('Starting PDF generation...');
         const pool = await getPool();
+        const reportType = req.query.type || 'full'; // 'full' or 'damage'
         const housingUnitId = req.query.housing_unit_id || '';
         
         // Build WHERE clause for housing unit filter
@@ -873,81 +907,109 @@ app.get('/api/generate-report', requireAuth, async (req, res) => {
         const housingFilterWithAnd = housingUnitId ? 'AND hu.id = ?' : '';
         const filterParams = housingUnitId ? [housingUnitId] : [];
         
-        console.log(`Generating report for housing unit: ${housingUnitId || 'ALL'}`);
+        console.log(`Generating ${reportType} report for housing unit: ${housingUnitId || 'ALL'}`);
         
-        // Get rooms with occupant info
-        console.log('Fetching rooms data...');
-        const roomsQuery = `
-            SELECT 
-                r.*,
-                hu.name as housing_unit_name,
-                hu.address,
-                e.name as occupant_name,
-                e.employee_id as occupant_id,
-                e.department as occupant_department,
-                e.position as occupant_position,
-                e.email as occupant_email,
-                e.phone as occupant_phone
-            FROM rooms r
-            LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
-            LEFT JOIN employees e ON r.id = e.assigned_room_id AND e.status = 'active'
-            ${housingFilter}
-            ORDER BY hu.name, r.room_number
-        `;
-        const [roomsData] = await pool.query(roomsQuery, filterParams);
-        console.log(`Fetched ${roomsData.length} rooms`);
-
-        // Get inventory data
-        console.log('Fetching inventory data...');
-        const inventoryQuery = `
-            SELECT 
-                i.*,
-                r.room_number,
-                r.room_type,
-                hu.name as housing_unit_name
-            FROM inventory_items i
-            LEFT JOIN rooms r ON i.room_id = r.id
-            LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
-            ${housingFilter}
-            ORDER BY hu.name, r.room_number, i.category, i.name
-        `;
-        const [inventoryData] = await pool.query(inventoryQuery, filterParams);
-        console.log(`Fetched ${inventoryData.length} inventory items`);
-
-        // Get damage reports data
-        console.log('Fetching damage reports...');
-        const damageQuery = `
-            SELECT 
-                dr.*,
-                i.name as item_name,
-                i.category,
-                r.room_number,
-                r.room_type,
-                hu.name as housing_unit_name
-            FROM damage_reports dr
-            LEFT JOIN inventory_items i ON dr.item_id = i.id
-            LEFT JOIN rooms r ON i.room_id = r.id
-            LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
-            ${housingFilter}
-            ORDER BY dr.reported_date DESC
-        `;
-        const [damageData] = await pool.query(damageQuery, filterParams);
-        console.log(`Fetched ${damageData.length} damage reports`);
-
-        // Get housing unit name if filtered
+        let roomsData = [];
+        let inventoryData = [];
+        let damageData = [];
         let housingUnitName = 'All Housing Units';
-        if (housingUnitId && roomsData.length > 0) {
-            housingUnitName = roomsData[0].housing_unit_name;
+
+        // Fetch only the data needed for the specific report type
+        if (reportType === 'full' || reportType === 'rooms') {
+            // Get rooms with occupant info
+            console.log('Fetching rooms data...');
+            const roomsQuery = `
+                SELECT 
+                    r.*,
+                    hu.name as housing_unit_name,
+                    hu.address,
+                    e.name as occupant_name,
+                    e.employee_id as occupant_id,
+                    e.department as occupant_department,
+                    e.position as occupant_position,
+                    e.email as occupant_email,
+                    e.phone as occupant_phone
+                FROM rooms r
+                LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
+                LEFT JOIN employees e ON r.id = e.assigned_room_id AND e.status = 'active'
+                ${housingFilter}
+                ORDER BY hu.name, r.room_number
+            `;
+            [roomsData] = await pool.query(roomsQuery, filterParams);
+            console.log(`Fetched ${roomsData.length} rooms`);
+            if (roomsData.length > 0) {
+                housingUnitName = roomsData[0].housing_unit_name || 'All Housing Units';
+            }
         }
 
-        // Generate HTML
+        if (reportType === 'full' || reportType === 'inventory') {
+            // Get inventory data
+            console.log('Fetching inventory data...');
+            const inventoryQuery = `
+                SELECT 
+                    i.*,
+                    r.room_number,
+                    r.room_type,
+                    hu.name as housing_unit_name
+                FROM inventory_items i
+                LEFT JOIN rooms r ON i.room_id = r.id
+                LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
+                ${housingFilter}
+                ORDER BY hu.name, r.room_number, i.category, i.name
+            `;
+            [inventoryData] = await pool.query(inventoryQuery, filterParams);
+            console.log(`Fetched ${inventoryData.length} inventory items`);
+            if (inventoryData.length > 0 && housingUnitName === 'All Housing Units') {
+                housingUnitName = inventoryData[0].housing_unit_name || 'All Housing Units';
+            }
+        }
+
+        if (reportType === 'full' || reportType === 'damage') {
+            // Get damage reports data
+            console.log('Fetching damage reports...');
+            const damageQuery = `
+                SELECT 
+                    dr.*,
+                    i.name as item_name,
+                    i.category,
+                    r.room_number,
+                    r.room_type,
+                    hu.name as housing_unit_name
+                FROM damage_reports dr
+                LEFT JOIN inventory_items i ON dr.item_id = i.id
+                LEFT JOIN rooms r ON i.room_id = r.id
+                LEFT JOIN housing_units hu ON r.housing_unit_id = hu.id
+                ${housingFilter}
+                ORDER BY dr.reported_date DESC
+            `;
+            [damageData] = await pool.query(damageQuery, filterParams);
+            console.log(`Fetched ${damageData.length} damage reports`);
+            if (damageData.length > 0 && housingUnitName === 'All Housing Units') {
+                housingUnitName = damageData[0].housing_unit_name || 'All Housing Units';
+            }
+        }
+
+        // Generate HTML based on report type
         console.log('Generating HTML...');
-        const html = generateReportHTML(roomsData, inventoryData, damageData, housingUnitName);
+        let html;
+        if (reportType === 'damage') {
+            // Generate styled damage report only
+            html = generateDamageReportHTML(damageData, housingUnitName);
+        } else if (reportType === 'rooms') {
+            // Generate rooms-only report
+            html = generateReportHTML(roomsData, [], [], housingUnitName);
+        } else if (reportType === 'inventory') {
+            // Generate inventory-only report
+            html = generateReportHTML([], inventoryData, [], housingUnitName);
+        } else {
+            // Generate full report
+            html = generateReportHTML(roomsData, inventoryData, damageData, housingUnitName);
+        }
         console.log('HTML generated successfully, length:', html.length);
 
         // Launch Puppeteer
         console.log('Launching Puppeteer...');
-        browser = await puppeteer.launch({
+            browser = await puppeteer.launch({
             headless: true,
             args: ['--no-sandbox', '--disable-setuid-sandbox']
         });
@@ -973,7 +1035,7 @@ app.get('/api/generate-report', requireAuth, async (req, res) => {
         });
         console.log('PDF generated, size:', pdf.length, 'bytes');
         
-        await browser.close();
+            await browser.close();
         browser = null;
         console.log('Browser closed');
             
@@ -988,11 +1050,11 @@ app.get('/api/generate-report', requireAuth, async (req, res) => {
         console.error('Error message:', err.message);
         console.error('Error stack:', err.stack);
         
-        if (browser) {
+            if (browser) {
             try {
                 await browser.close();
                 console.log('Browser closed after error');
-            } catch (closeErr) {
+        } catch (closeErr) {
                 console.error('Error closing browser:', closeErr.message);
             }
         }
@@ -1139,12 +1201,12 @@ function generateReportHTML(roomsData, inventoryData, damageData, housingUnitNam
             <h2>Comprehensive Estate Report</h2>
             ${housingUnitName !== 'All Housing Units' ? `<h3 style="color: #666; font-size: 12px; margin-top: 5px;">Housing Unit: ${housingUnitName}</h3>` : ''}
         </div>
-        
+
         <!-- Report Metadata -->
         <div class="report-meta">
             <strong>Report Date:</strong> ${currentDate} | <strong>Generated:</strong> ${currentDateTime} | <strong>Scope:</strong> ${housingUnitName}
-        </div>
-        
+                    </div>
+
         <!-- Summary Statistics -->
         <div class="section-title">Executive Summary</div>
         <table class="stats-table">
@@ -1200,23 +1262,23 @@ function generateReportHTML(roomsData, inventoryData, damageData, housingUnitNam
                 <th>No.</th>
                 <th>Housing Unit</th>
                 <th>Room</th>
-                <th>Item Name</th>
-                <th>Category</th>
-                <th>Quantity</th>
-                <th>Condition</th>
-            </tr>
+                                    <th>Item Name</th>
+                                    <th>Category</th>
+                                    <th>Quantity</th>
+                                    <th>Condition</th>
+                                </tr>
             ${inventoryData.map((item, index) => `
-            <tr>
+                                <tr>
                 <td class="center">${index + 1}</td>
                 <td>${item.housing_unit_name || 'N/A'}</td>
                 <td class="center">${item.room_number || 'N/A'}</td>
                 <td>${item.name}</td>
-                <td>${item.category}</td>
+                                    <td>${item.category}</td>
                 <td class="center">${item.quantity}</td>
                 <td class="center" style="text-transform: capitalize;">${item.condition}</td>
-            </tr>
-            `).join('')}
-        </table>
+                                </tr>
+                                `).join('')}
+                        </table>
         
         ${damageData.length > 0 ? `
         <!-- Damage Reports Table -->
@@ -1226,28 +1288,277 @@ function generateReportHTML(roomsData, inventoryData, damageData, housingUnitNam
                 <th>No.</th>
                 <th>Item Name</th>
                 <th>Room</th>
-                <th>Damage Type</th>
-                <th>Severity</th>
-                <th>Reported By</th>
-                <th>Date</th>
+                                    <th>Damage Type</th>
+                                    <th>Severity</th>
+                <th>Description</th>
+                                    <th>Reported By</th>
+                <th>Date Reported</th>
                 <th>Status</th>
-            </tr>
+                                </tr>
             ${damageData.map((report, index) => `
             <tr>
                 <td class="center">${index + 1}</td>
                 <td>${report.item_name || 'N/A'}</td>
                 <td class="center">${report.room_number || 'N/A'}</td>
-                <td>${report.damage_type}</td>
-                <td class="center" style="text-transform: capitalize;">${report.severity}</td>
-                <td>${report.reported_by}</td>
-                <td class="center">${report.reported_date || report.damage_date || 'N/A'}</td>
-                <td class="center" style="text-transform: capitalize;">${report.damage_status}</td>
-            </tr>
-            `).join('')}
-        </table>
+                <td style="text-transform: capitalize;">${report.damage_type || 'N/A'}</td>
+                <td class="center" style="text-transform: capitalize; font-weight: bold; color: ${report.severity === 'severe' ? '#dc2626' : report.severity === 'moderate' ? '#f59e0b' : '#16a34a'};">${report.severity || 'N/A'}</td>
+                <td style="max-width: 200px; word-wrap: break-word;">${report.description || 'No description provided'}</td>
+                <td>${report.reported_by || 'N/A'}</td>
+                <td class="center">${report.reported_date ? new Date(report.reported_date).toLocaleDateString() : (report.damage_date ? new Date(report.damage_date).toLocaleDateString() : 'N/A')}</td>
+                <td class="center" style="text-transform: capitalize; font-weight: bold; color: ${report.damage_status === 'resolved' ? '#16a34a' : report.damage_status === 'in_progress' ? '#f59e0b' : '#6b7280'};">${report.damage_status || 'pending'}</td>
+                                </tr>
+                                `).join('')}
+                        </table>
         ` : ''}
         
         <!-- Footer -->
+        <div class="footer">
+            Generated on ${currentDateTime} | HTH Estate Management System<br/>
+            This is a computer-generated report and does not require a signature
+        </div>
+    </body>
+    </html>
+    `;
+}
+
+// Generate Styled Damage Report HTML (Medical Report Style)
+function generateDamageReportHTML(damageData, housingUnitName = 'All Housing Units') {
+    const currentDate = new Date().toLocaleDateString();
+    const currentDateTime = new Date().toLocaleString();
+    
+    // Read and convert logo to base64
+    let logoBase64 = '';
+    try {
+        const logoPath = path.join(__dirname, 'Asset', 'HTH logo.jpeg');
+        const logoBuffer = fs.readFileSync(logoPath);
+        logoBase64 = `data:image/jpeg;base64,${logoBuffer.toString('base64')}`;
+    } catch (err) {
+        console.error('Error reading logo:', err);
+    }
+
+    return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>HTH Damage Report</title>
+        <style>
+            @page {
+                margin: 1.5cm;
+                size: A4 portrait;
+            }
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
+            }
+            body {
+                font-family: Arial, Helvetica, sans-serif;
+                font-size: 11pt;
+                color: #2c3e50;
+                line-height: 1.6;
+                padding: 20px;
+            }
+            .logo-container {
+                text-align: center;
+                margin-bottom: 30px;
+            }
+            .logo-img {
+                max-width: 120px;
+                height: auto;
+            }
+            .report-header {
+                text-align: center;
+                margin-bottom: 30px;
+                border-bottom: 3px solid #3498db;
+                padding-bottom: 15px;
+            }
+            .report-title {
+                font-size: 20pt;
+                font-weight: bold;
+                color: #2c3e50;
+                margin-bottom: 5px;
+            }
+            .report-subtitle {
+                font-size: 11pt;
+                color: #7f8c8d;
+            }
+            .damage-item {
+                background: #fff;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 20px;
+                margin-bottom: 25px;
+                page-break-inside: avoid;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .item-header {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                gap: 15px;
+                margin-bottom: 20px;
+                padding-bottom: 15px;
+                border-bottom: 2px solid #ecf0f1;
+            }
+            .field-group {
+                margin-bottom: 15px;
+            }
+            .field-label {
+                font-weight: bold;
+                color: #34495e;
+                font-size: 10pt;
+                margin-bottom: 5px;
+                display: block;
+            }
+            .field-value {
+                background: #f8f9fa;
+                padding: 8px 12px;
+                border-radius: 4px;
+                color: #2c3e50;
+                display: block;
+                min-height: 30px;
+            }
+            .section-title {
+                font-size: 12pt;
+                font-weight: bold;
+                color: #2c3e50;
+                margin: 20px 0 12px 0;
+                padding-bottom: 8px;
+                border-bottom: 2px solid #3498db;
+            }
+            .description-box {
+                background: #f8f9fa;
+                padding: 15px;
+                border-left: 4px solid #3498db;
+                margin: 10px 0;
+                min-height: 60px;
+                line-height: 1.8;
+            }
+            .notes-box {
+                background: #fff9e6;
+                padding: 15px;
+                border-left: 4px solid #f39c12;
+                margin: 10px 0;
+                min-height: 60px;
+                line-height: 1.8;
+            }
+            .severity-badge {
+                display: inline-block;
+                padding: 5px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 10pt;
+                text-transform: capitalize;
+            }
+            .severity-severe { background: #fee; color: #c00; }
+            .severity-moderate { background: #fff3cd; color: #856404; }
+            .severity-minor { background: #d4edda; color: #155724; }
+            .status-badge {
+                display: inline-block;
+                padding: 5px 12px;
+                border-radius: 4px;
+                font-weight: bold;
+                font-size: 10pt;
+                text-transform: capitalize;
+            }
+            .status-pending { background: #e9ecef; color: #495057; }
+            .status-in_progress { background: #fff3cd; color: #856404; }
+            .status-resolved { background: #d4edda; color: #155724; }
+            .footer {
+                text-align: center;
+                font-size: 9pt;
+                color: #7f8c8d;
+                margin-top: 40px;
+                padding-top: 15px;
+                border-top: 1px solid #ddd;
+            }
+        </style>
+    </head>
+    <body>
+        ${logoBase64 ? `
+        <div class="logo-container">
+            <img src="${logoBase64}" alt="HTH Logo" class="logo-img">
+        </div>
+        ` : ''}
+        
+        <div class="report-header">
+            <div class="report-title">Damage Reports</div>
+            <div class="report-subtitle">${housingUnitName} | Generated: ${currentDate}</div>
+        </div>
+
+        ${damageData.length === 0 ? `
+        <div style="text-align: center; padding: 40px; color: #7f8c8d;">
+            <p style="font-size: 14pt;">No damage reports found</p>
+        </div>
+        ` : damageData.map((report, index) => `
+        <div class="damage-item">
+            <div class="item-header">
+                <div class="field-group">
+                    <span class="field-label">Item Name:</span>
+                    <span class="field-value">${report.item_name || 'N/A'}</span>
+                </div>
+                <div class="field-group">
+                    <span class="field-label">Room:</span>
+                    <span class="field-value">${report.housing_unit_name || 'N/A'} - Room ${report.room_number || 'N/A'}</span>
+                </div>
+                <div class="field-group">
+                    <span class="field-label">Report No:</span>
+                    <span class="field-value">#${String(index + 1).padStart(3, '0')}</span>
+                </div>
+            </div>
+
+            <div class="item-header">
+                <div class="field-group">
+                    <span class="field-label">Damage Type:</span>
+                    <span class="field-value" style="text-transform: capitalize;">${report.damage_type || 'N/A'}</span>
+                </div>
+                <div class="field-group">
+                    <span class="field-label">Severity:</span>
+                    <span class="field-value">
+                        <span class="severity-badge severity-${report.severity || 'minor'}">
+                            ${report.severity || 'N/A'}
+                        </span>
+                    </span>
+                </div>
+                <div class="field-group">
+                    <span class="field-label">Status:</span>
+                    <span class="field-value">
+                        <span class="status-badge status-${(report.damage_status || 'pending').replace(' ', '_')}">
+                            ${(report.damage_status || 'pending').replace('_', ' ')}
+                        </span>
+                    </span>
+                </div>
+            </div>
+
+            <div class="section-title">Description:</div>
+            <div class="description-box">
+                ${report.description || 'No description provided.'}
+            </div>
+
+            <div class="item-header" style="margin-top: 20px;">
+                <div class="field-group">
+                    <span class="field-label">Reported By:</span>
+                    <span class="field-value">${report.reported_by || 'N/A'}</span>
+                </div>
+                <div class="field-group">
+                    <span class="field-label">Date Reported:</span>
+                    <span class="field-value">${report.reported_date ? new Date(report.reported_date).toLocaleDateString() : (report.damage_date ? new Date(report.damage_date).toLocaleDateString() : 'N/A')}</span>
+                </div>
+                <div class="field-group">
+                    <span class="field-label">Estimated Cost:</span>
+                    <span class="field-value">${report.estimated_repair_cost ? '$' + parseFloat(report.estimated_repair_cost).toFixed(2) : 'Not estimated'}</span>
+                </div>
+            </div>
+
+            ${report.repair_notes || report.resolution_notes ? `
+            <div class="section-title">Repair Notes:</div>
+            <div class="notes-box">
+                ${report.repair_notes || report.resolution_notes || 'No repair notes.'}
+            </div>
+            ` : ''}
+        </div>
+        `).join('')}
+
         <div class="footer">
             Generated on ${currentDateTime} | HTH Estate Management System<br/>
             This is a computer-generated report and does not require a signature

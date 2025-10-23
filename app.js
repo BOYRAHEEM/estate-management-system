@@ -190,6 +190,73 @@ class EstateManagementApp {
             console.error('Error setting up login form listener:', error);
         }
 
+        // Burger menu functionality
+        const burgerMenuBtn = document.getElementById('burger-menu-btn');
+        const burgerMenuDropdown = document.getElementById('burger-menu-dropdown');
+        
+        if (burgerMenuBtn && burgerMenuDropdown) {
+            // Function to position dropdown on mobile
+            const positionDropdown = () => {
+                const isMobile = window.innerWidth <= 767;
+                if (isMobile) {
+                    const btnRect = burgerMenuBtn.getBoundingClientRect();
+                    const dropdownHeight = burgerMenuDropdown.offsetHeight || 200;
+                    const viewportHeight = window.innerHeight;
+                    
+                    // Calculate if dropdown fits below button
+                    const spaceBelow = viewportHeight - btnRect.bottom - 10;
+                    const fitsBelow = spaceBelow >= dropdownHeight;
+                    
+                    if (fitsBelow) {
+                        // Position below button
+                        burgerMenuDropdown.style.top = `${btnRect.bottom + 8}px`;
+                    } else {
+                        // Position above button
+                        burgerMenuDropdown.style.top = `${btnRect.top - dropdownHeight - 8}px`;
+                    }
+                }
+            };
+            
+            // Toggle burger menu
+            burgerMenuBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isShowing = burgerMenuDropdown.classList.contains('show');
+                
+                if (!isShowing) {
+                    positionDropdown();
+                }
+                
+                burgerMenuDropdown.classList.toggle('show');
+                burgerMenuBtn.classList.toggle('active');
+            });
+            
+            // Reposition on window resize
+            window.addEventListener('resize', () => {
+                if (burgerMenuDropdown.classList.contains('show')) {
+                    positionDropdown();
+                }
+            });
+            
+            // Close burger menu when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!burgerMenuBtn.contains(e.target) && !burgerMenuDropdown.contains(e.target)) {
+                    burgerMenuDropdown.classList.remove('show');
+                    burgerMenuBtn.classList.remove('active');
+                }
+            });
+            
+            // Handle burger menu item clicks
+            const burgerMenuItems = burgerMenuDropdown.querySelectorAll('.burger-menu-item[data-section]');
+            burgerMenuItems.forEach(item => {
+                item.addEventListener('click', () => {
+                    const section = item.getAttribute('data-section');
+                    this.showSection(section);
+                    burgerMenuDropdown.classList.remove('show');
+                    burgerMenuBtn.classList.remove('active');
+                });
+            });
+        }
+
         // Logout button
         const logoutBtn = document.getElementById('logout-btn');
         if (logoutBtn) {
@@ -565,13 +632,26 @@ class EstateManagementApp {
             }
             
             // Show/hide elements based on role
+            const isSuperAdmin = this.currentUser.role === 'super_admin';
+            
+            // Show super admin only elements
             const superAdminElements = document.querySelectorAll('.super-admin-only');
             superAdminElements.forEach(element => {
-                if (this.currentUser.role === 'super_admin') {
+                if (isSuperAdmin) {
                     element.classList.add('show');
                     element.style.display = '';
                 } else {
                     element.classList.remove('show');
+                    element.style.display = 'none';
+                }
+            });
+            
+            // Show non-super admin only elements (like profile button for regular users)
+            const nonSuperAdminElements = document.querySelectorAll('.non-super-admin-only');
+            nonSuperAdminElements.forEach(element => {
+                if (!isSuperAdmin) {
+                    element.style.display = '';
+                } else {
                     element.style.display = 'none';
                 }
             });
@@ -661,10 +741,20 @@ class EstateManagementApp {
             this.inventoryItems = inventoryItems;
             this.employees = employees;
 
-            // Load damage reports for super admins to update notification badge
-            if (this.currentUser && this.currentUser.role === 'super_admin') {
-                console.log('Fetching damage reports...');
-                await this.loadDamageReports();
+            // Load damage reports for all users (needed to check if items are already reported)
+            console.log('Fetching damage reports...');
+            try {
+                this.damageReports = await this.fetchData('/api/damage-reports');
+                console.log('Damage reports loaded:', this.damageReports.length);
+                
+                // Update UI elements only for super admins
+                if (this.currentUser && this.currentUser.role === 'super_admin') {
+                    this.updateDamageReportsStats();
+                    this.updateDamageReportsNotification();
+                }
+            } catch (error) {
+                console.error('Error loading damage reports:', error);
+                this.damageReports = []; // Set to empty array if load fails
             }
 
             this.populateHousingTypeFilter();
@@ -1239,7 +1329,6 @@ class EstateManagementApp {
                     <h3 class="card-title">${employee.name}</h3>
                     <div class="card-actions">
                         <button class="btn btn-secondary" onclick="app.editEmployee('${employee.id}')"><i class="fas fa-edit"></i> Edit</button>
-                        <button class="btn btn-danger" onclick="app.deleteEmployee('${employee.id}')"><i class="fas fa-trash"></i> Delete</button>
                     </div>
                 </div>
                 <div class="card-content">
@@ -1667,6 +1756,113 @@ class EstateManagementApp {
         }
     }
 
+    showItemDetails(id) {
+        const item = this.inventoryItems.find(i => i.id === id);
+        if (!item) return;
+        
+        const content = `
+            <div class="item-details-modal">
+                <div class="detail-header">
+                    <div class="detail-icon">
+                        <i class="fas fa-${this.getItemIcon(item.category)}"></i>
+                    </div>
+                    <h2>${item.name}</h2>
+                    <span class="status-badge status-${item.condition}">${item.condition}</span>
+                </div>
+                <div class="detail-content">
+                    <div class="detail-row">
+                        <span class="detail-label">Category</span>
+                        <span class="detail-value">${item.category}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Quantity</span>
+                        <span class="detail-value">${item.quantity} ${item.unit || 'pcs'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Location</span>
+                        <span class="detail-value">${item.housing_unit_name || 'Unknown Unit'} - Room ${item.room_number || 'N/A'}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Room Type</span>
+                        <span class="detail-value">${item.room_type || 'N/A'}</span>
+                    </div>
+                    ${item.description ? `
+                    <div class="detail-row">
+                        <span class="detail-label">Description</span>
+                        <span class="detail-value">${item.description}</span>
+                    </div>
+                    ` : ''}
+                </div>
+            </div>
+        `;
+        
+        this.showModal('Item Details', content, { showSave: false });
+    }
+
+    showItemMenu(id) {
+        const item = this.inventoryItems.find(i => i.id === id);
+        if (!item) return;
+        
+        const isSuperAdmin = this.currentUser && this.currentUser.role === 'super_admin';
+        
+        // Check if item has an active damage report (pending or in_progress)
+        const hasActiveDamageReport = this.damageReports && this.damageReports.some(report => 
+            report.item_id === id && 
+            (report.damage_status === 'pending' || report.damage_status === 'in_progress')
+        );
+        
+        const content = `
+            <div class="item-menu-modal">
+                <button type="button" class="menu-option" id="edit-item-btn">
+                    <i class="fas fa-edit"></i> Edit Item
+                </button>
+                ${!isSuperAdmin ? (hasActiveDamageReport ? `
+                <div class="menu-option" style="opacity: 0.7; cursor: default; background: #fff3cd; border-left: 3px solid #ffc107; pointer-events: none;">
+                    <i class="fas fa-info-circle" style="color: #ffc107;"></i> Already Reported
+                </div>
+                ` : `
+                <button type="button" class="menu-option" id="report-damage-btn">
+                    <i class="fas fa-exclamation-triangle"></i> Report Damage
+                </button>
+                `) : ''}
+                ${isSuperAdmin ? `
+                <button type="button" class="menu-option danger" id="delete-item-btn">
+                    <i class="fas fa-trash"></i> Delete Item
+                </button>
+                ` : ''}
+            </div>
+        `;
+        
+        this.showModal('Item Actions', content, { showSave: false });
+        
+        // Add event listeners after modal is shown
+        setTimeout(() => {
+            const editBtn = document.getElementById('edit-item-btn');
+            const reportBtn = document.getElementById('report-damage-btn');
+            const deleteBtn = document.getElementById('delete-item-btn');
+            
+            if (editBtn) {
+                editBtn.addEventListener('click', () => {
+                    this.closeModal();
+                    this.editInventory(id);
+                });
+            }
+            
+            if (reportBtn && !isSuperAdmin && !hasActiveDamageReport) {
+                reportBtn.addEventListener('click', () => {
+                    this.closeModal();
+                    this.reportDamage(id);
+                });
+            }
+            
+            if (deleteBtn && isSuperAdmin) {
+                deleteBtn.addEventListener('click', () => {
+                    this.deleteInventory(id);
+                });
+            }
+        }, 100);
+    }
+
     async editEmployee(id) {
         const employee = this.employees.find(e => e.id === id);
         if (employee) {
@@ -1690,6 +1886,12 @@ class EstateManagementApp {
     }
 
     async deleteInventory(id) {
+        // Only super admins can delete inventory items
+        if (this.currentUser.role !== 'super_admin') {
+            this.showNotification('Only Super Admins can delete inventory items', 'error');
+            return;
+        }
+        
         if (confirm('Are you sure you want to delete this inventory item?')) {
             try {
                 await this.deleteData(`/api/inventory/${id}`);
@@ -2124,64 +2326,39 @@ class EstateManagementApp {
                         <i class="fas fa-plus"></i> Add First Item
                     </button>
                 </div>`
-                : roomItems.map(item => `
-                    <div class="inventory-item-card">
-                        <div class="item-header">
-                            <div class="item-icon">
-                                <i class="fas fa-${this.getItemIcon(item.category)}"></i>
-                            </div>
-                            <div class="item-info">
-                                <h4 class="item-name">${item.name}</h4>
-                                <p class="item-category">${item.category}</p>
-                            </div>
-                            <div class="item-status">
-                                <span class="status-indicator status-${item.condition}"></span>
-                                <span class="status-text">${item.condition}</span>
-                            </div>
-                        </div>
-                        
-                        <div class="item-details">
-                            <div class="detail-row">
-                                <span class="detail-label">Quantity</span>
-                                <span class="detail-value">${item.quantity} ${item.unit || 'pcs'}</span>
-                            </div>
-                            ${item.description ? `
-                            <div class="detail-row">
-                                <span class="detail-label">Description</span>
-                                <span class="detail-value">${item.description}</span>
-                            </div>
-                            ` : ''}
-                        </div>
-                        
-                        <div class="item-actions">
-                            ${this.currentUser && this.currentUser.role === 'super_admin' ? '' : `
-                            ${item.condition === 'damaged' || item.condition === 'repairing' ? '' : `
-                            <button class="action-btn damage-btn" onclick="app.reportDamage('${item.id}')" title="Report Damage">
-                                <i class="fas fa-exclamation-triangle"></i>
-                            </button>
-                            `}
-                            `}
-                            ${item.condition === 'repairing' ? `
-                            <span class="status-badge repairing">
-                                <i class="fas fa-tools"></i> Under Repair
-                            </span>
-                            ` : ''}
-                            ${item.condition === 'damaged' ? `
-                            <span class="status-badge damaged">
-                                <i class="fas fa-exclamation-triangle"></i> Damaged
-                            </span>
-                            ` : ''}
-                            ${this.currentUser && this.currentUser.role === 'super_admin' ? `
-                            <button class="action-btn edit-btn" onclick="app.editInventory('${item.id}')" title="Edit Item">
-                                <i class="fas fa-edit"></i>
-                            </button>
-                            <button class="action-btn delete-btn" onclick="app.deleteInventory('${item.id}')" title="Delete Item">
-                                <i class="fas fa-trash"></i>
-                            </button>
-                            ` : ''}
-                        </div>
+        : roomItems.map(item => `
+            <div class="compliance-card condition-${item.condition}" onclick="app.showItemDetails('${item.id}')">
+                <div class="compliance-icon-wrapper">
+                    <div class="compliance-icon condition-${item.condition}">
+                        <i class="fas fa-${this.getItemIcon(item.category)}"></i>
                     </div>
-                `).join('');
+                </div>
+                
+                <div class="compliance-card-header">
+                    <h3 class="compliance-card-title">${item.name}</h3>
+                    <button class="compliance-menu-btn" onclick="event.stopPropagation(); app.showItemMenu('${item.id}')">
+                        <i class="fas fa-ellipsis-v"></i>
+                    </button>
+                </div>
+                
+                <div class="compliance-card-body">
+                    <div class="compliance-metric">
+                        <span class="metric-value">${item.quantity}</span>
+                        <span class="metric-unit">${item.unit || 'pcs'}</span>
+                    </div>
+                    <span class="status-indicator condition-${item.condition}">
+                        ${item.condition === 'good' ? '<i class="fas fa-check"></i>' : ''}
+                        ${item.condition === 'damaged' ? '<i class="fas fa-times"></i>' : ''}
+                        ${item.condition === 'repairing' ? '<i class="fas fa-clock"></i>' : ''}
+                        ${item.condition.charAt(0).toUpperCase() + item.condition.slice(1)}
+                    </span>
+                </div>
+                
+                <button class="compliance-arrow-btn" onclick="event.stopPropagation(); app.showItemDetails('${item.id}')">
+                    <i class="fas fa-chevron-right"></i>
+                </button>
+            </div>
+        `).join('');
             return `
                 <div class="room-group">
                     <div class="room-group-header" onclick="app.toggleRoomInventory('${room.id}')">
@@ -2655,14 +2832,15 @@ class EstateManagementApp {
     renderDamageReportCard(report) {
         const createdDate = new Date(report.created_at).toLocaleDateString();
         const damageDate = report.damage_date ? new Date(report.damage_date).toLocaleDateString() : 'Not specified';
-        const estimatedCost = report.estimated_cost ? `$${parseFloat(report.estimated_cost).toFixed(2)}` : 'Not specified';
+        const estimatedCost = report.estimated_repair_cost ? `$${parseFloat(report.estimated_repair_cost).toFixed(2)}` : 'Not specified';
+        const status = report.damage_status || 'pending';
 
         return `
             <div class="damage-report-card ${report.severity}">
                 <div class="damage-report-header">
                     <h3 class="damage-report-title">${report.item_name}</h3>
                     <div class="damage-report-meta">
-                        <span class="damage-report-status ${report.status}">${report.status.replace('_', ' ')}</span>
+                        <span class="damage-report-status ${status}">${status.replace('_', ' ')}</span>
                         <span class="damage-report-severity ${report.severity}">${report.severity}</span>
                     </div>
                 </div>
@@ -2706,7 +2884,7 @@ class EstateManagementApp {
                 </div>
                 
                 <div class="damage-report-actions">
-                    ${report.status === 'pending' ? `
+                    ${status === 'pending' ? `
                     <button class="btn btn-secondary" onclick="app.updateDamageReportStatus('${report.id}', 'in_progress')">
                         <i class="fas fa-play"></i> Start Repair
                     </button>
@@ -2714,7 +2892,7 @@ class EstateManagementApp {
                         <i class="fas fa-check"></i> Mark Resolved
                     </button>
                     ` : ''}
-                    ${report.status === 'in_progress' ? `
+                    ${status === 'in_progress' ? `
                     <button class="btn btn-success" onclick="app.updateDamageReportStatus('${report.id}', 'resolved')">
                         <i class="fas fa-check"></i> Mark Resolved
                     </button>
@@ -2722,7 +2900,7 @@ class EstateManagementApp {
                         <i class="fas fa-tools"></i> Repair In Progress
                     </button>
                     ` : ''}
-                    ${report.status === 'resolved' ? `
+                    ${status === 'resolved' ? `
                     <button class="btn btn-success" disabled>
                         <i class="fas fa-check-circle"></i> Resolved
                     </button>
@@ -2740,7 +2918,7 @@ class EstateManagementApp {
             totalReports.textContent = this.damageReports.length;
         }
         if (pendingReports) {
-            const pendingCount = this.damageReports.filter(report => report.status === 'pending').length;
+            const pendingCount = this.damageReports.filter(report => report.damage_status === 'pending').length;
             pendingReports.textContent = pendingCount;
         }
     }
@@ -2748,7 +2926,7 @@ class EstateManagementApp {
     updateDamageReportsNotification() {
         const badge = document.getElementById('damage-reports-badge');
         if (badge) {
-            const pendingCount = this.damageReports.filter(report => report.status === 'pending').length;
+            const pendingCount = this.damageReports.filter(report => report.damage_status === 'pending').length;
             if (pendingCount > 0) {
                 badge.textContent = pendingCount;
                 badge.style.display = 'flex';
@@ -2760,7 +2938,7 @@ class EstateManagementApp {
 
     async updateDamageReportStatus(reportId, newStatus) {
         try {
-            await this.putData(`/api/damage-reports/${reportId}`, { status: newStatus });
+            await this.putData(`/api/damage-reports/${reportId}/status`, { status: newStatus });
             this.showNotification(`Damage report ${newStatus.replace('_', ' ')} successfully`, 'success');
             
             // Refresh damage reports

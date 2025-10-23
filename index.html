@@ -59,16 +59,36 @@
                         <i class="fas fa-users"></i> Employees
                     </button>
                     
-                <button class="nav-btn super-admin-only" data-section="damage-reports" style="display: none;">
-                    <i class="fas fa-exclamation-triangle"></i> Damage Reports
-                    <span class="notification-badge" id="damage-reports-badge" style="display: none;">0</span>
-                </button>
-                <button class="nav-btn super-admin-only" data-section="user-management" style="display: none;">
-                    <i class="fas fa-users-cog"></i> User Management
-                </button>
-                <button class="nav-btn" data-section="profile">
-                    <i class="fas fa-user-cog"></i> Profile
-                </button>
+                    <button class="nav-btn super-admin-only" data-section="damage-reports" style="display: none;">
+                        <i class="fas fa-exclamation-triangle"></i> Damage Reports
+                        <span class="notification-badge" id="damage-reports-badge" style="display: none;">0</span>
+                    </button>
+                    
+                    <!-- Profile button for regular users -->
+                    <button class="nav-btn non-super-admin-only" data-section="profile" style="display: none;">
+                        <i class="fas fa-user-cog"></i> Profile
+                    </button>
+                    
+                    <!-- Burger Menu for Super Admin -->
+                    <div class="burger-menu-container super-admin-only" style="display: none;">
+                        <button class="burger-menu-btn" id="burger-menu-btn">
+                            <i class="fas fa-bars"></i>
+                        </button>
+                        <div class="burger-menu-dropdown" id="burger-menu-dropdown">
+                            <button class="burger-menu-item" data-section="user-management">
+                                <i class="fas fa-users-cog"></i>
+                                <span>User Management</span>
+                            </button>
+                            <button class="burger-menu-item" data-section="profile">
+                                <i class="fas fa-user-cog"></i>
+                                <span>Profile</span>
+                            </button>
+                            <button class="burger-menu-item" id="logout-btn">
+                                <i class="fas fa-sign-out-alt"></i>
+                                <span>Logout</span>
+                            </button>
+                        </div>
+                    </div>
                 </nav>
             </div>
         </header>
@@ -444,16 +464,16 @@
                     <button class="btn btn-secondary" onclick="app.showChangePasswordForm()">
                         <i class="fas fa-key"></i> Change Password
                     </button>
-                    <button class="btn btn-info" onclick="app.showLoginHistory()">
+                    <button class="btn btn-info super-admin-only" onclick="app.showLoginHistory()" style="display: none;">
                         <i class="fas fa-history"></i> Login History
                     </button>
-                    <button class="btn btn-warning" onclick="app.showSystemSettings()">
+                    <button class="btn btn-warning super-admin-only" onclick="app.showSystemSettings()" style="display: none;">
                         <i class="fas fa-cog"></i> System Settings
                     </button>
-                    <button class="btn btn-dark" onclick="app.showActivityLog()">
+                    <button class="btn btn-dark super-admin-only" onclick="app.showActivityLog()" style="display: none;">
                         <i class="fas fa-list-alt"></i> Activity Log
                     </button>
-                    <button class="btn btn-outline-primary" onclick="app.showSecuritySettings()">
+                    <button class="btn btn-outline-primary super-admin-only" onclick="app.showSecuritySettings()" style="display: none;">
                         <i class="fas fa-shield-alt"></i> Security Settings
                     </button>
                 </div>
