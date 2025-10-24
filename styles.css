@@ -87,6 +87,52 @@ html {
     text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
+/* Skeleton Loading Styles */
+.loading-skeleton {
+    padding: 20px;
+}
+
+.skeleton-line {
+    height: 16px;
+    background: linear-gradient(
+        90deg,
+        #f0f0f0 0%,
+        #e0e0e0 50%,
+        #f0f0f0 100%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-loading 1.5s ease-in-out infinite;
+    border-radius: 4px;
+    margin-bottom: 10px;
+}
+
+.skeleton-line:nth-child(1) {
+    width: 90%;
+}
+
+.skeleton-line:nth-child(2) {
+    width: 70%;
+}
+
+.skeleton-line:nth-child(3) {
+    width: 80%;
+}
+
+@keyframes skeleton-loading {
+    0% {
+        background-position: 200% 0;
+    }
+    100% {
+        background-position: -200% 0;
+    }
+}
+
+.loading-text {
+    display: inline-block;
+    animation: pulse 1.5s ease-in-out infinite;
+    opacity: 0.6;
+}
+
 /* Login Page Styles */
 .login-page {
     display: flex;
@@ -1132,10 +1178,27 @@ body {
         flex-direction: column;
         align-items: stretch;
         text-align: center;
+        padding: 1.25rem;
+        gap: 1.5rem;
     }
     
     .occupancy-total {
         justify-content: center;
+    }
+    
+    .total-icon {
+        width: 56px;
+        height: 56px;
+        min-width: 56px;
+        font-size: 1.5rem;
+    }
+    
+    .total-number {
+        font-size: 2rem;
+    }
+    
+    .total-label {
+        font-size: 0.85rem;
     }
     
     .occupancy-percentage {
@@ -1143,12 +1206,35 @@ body {
         justify-content: center;
     }
     
+    .percentage-circle {
+        width: 100px;
+        height: 100px;
+        min-width: 100px;
+        min-height: 100px;
+    }
+    
+    .percent-value {
+        font-size: 1.5rem;
+    }
+    
+    .percent-label {
+        font-size: 0.65rem;
+    }
+    
     .occupancy-status-grid {
         grid-template-columns: 1fr;
+        gap: 1rem;
     }
     
     .status-card {
         min-height: 140px;
+        padding: 1.25rem;
+    }
+    
+    .status-icon {
+        width: 48px;
+        height: 48px;
+        font-size: 1.25rem;
     }
 }
 
@@ -1635,6 +1721,8 @@ body {
     transition: all 0.3s ease;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    max-width: 100%;
 }
 
 .dashboard-card h3 {
@@ -1649,10 +1737,42 @@ body {
 @media (max-width: 768px) {
     .dashboard-grid {
         grid-template-columns: 1fr;
+        gap: 1.5rem;
+    }
+    
+    .dashboard-card {
+        padding: 1.25rem;
+        overflow: hidden;
+    }
+    
+    .dashboard-card h3 {
+        font-size: 1.1rem;
+        margin-bottom: 1rem;
     }
     
     .stats-grid {
         grid-template-columns: 1fr;
+    }
+    
+    /* Chart responsiveness */
+    .chart-container {
+        height: auto;
+        min-height: 200px;
+        padding: 1rem;
+        overflow-x: auto;
+    }
+    
+    .bar-chart {
+        gap: 0.5rem;
+        min-width: 100%;
+        justify-content: space-evenly;
+    }
+    
+    .bar {
+        width: 32px;
+        min-width: 24px;
+        max-width: 40px;
+        flex: 1;
     }
 }
 
@@ -3492,6 +3612,8 @@ body {
     background: #f8f9fa;
     border-radius: 8px;
     border: 1px solid #e9ecef;
+    flex-wrap: wrap;
+    gap: 0.5rem;
 }
 
 .stat-item {
@@ -4127,6 +4249,103 @@ input[readonly]:focus {
 
 .footer-email a:hover {
     color: #5dade2;
+}
+
+/* Dashboard Footer */
+.dashboard-footer {
+    background: linear-gradient(135deg, #1e3c72 0%, #2a5298 50%, #1e3c72 100%);
+    color: #ecf0f1;
+    padding: 1.5rem 2rem;
+    margin-top: auto;
+    border-top: 3px solid #3498db;
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.15);
+    position: relative;
+    overflow: hidden;
+}
+
+.dashboard-footer::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 3px;
+    background: linear-gradient(90deg, transparent, #3498db, #2ecc71, transparent);
+    animation: shimmer 4s infinite;
+}
+
+.dashboard-footer .footer-content {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    text-align: center;
+}
+
+.dashboard-footer .footer-content p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: #bdc3c7;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+.dashboard-footer .footer-content strong {
+    color: #fff;
+    font-weight: 600;
+    background: linear-gradient(135deg, #3498db, #2ecc71);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.dashboard-footer .footer-content a {
+    color: #3498db;
+    text-decoration: none;
+    transition: all 0.3s ease;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+}
+
+.dashboard-footer .footer-content a:hover {
+    color: #5dade2;
+    background: rgba(52, 152, 219, 0.1);
+}
+
+.dashboard-footer .footer-content i {
+    color: #3498db;
+    font-size: 0.85rem;
+}
+
+/* Ensure app div uses flexbox for footer positioning */
+#app {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+#app .main-content {
+    flex: 1;
+}
+
+/* Responsive Dashboard Footer */
+@media (max-width: 768px) {
+    .dashboard-footer {
+        padding: 1.2rem 1.5rem;
+    }
+    
+    .dashboard-footer .footer-content {
+        gap: 0.4rem;
+    }
+    
+    .dashboard-footer .footer-content p {
+        font-size: 0.85rem;
+    }
 }
 
 /* Responsive Footer */
@@ -5071,6 +5290,44 @@ input[readonly]:focus {
     
     .user-info i {
         font-size: 0.7rem;
+    }
+    
+    /* Dashboard Cards on Small Screens */
+    .dashboard-card {
+        padding: 1rem;
+    }
+    
+    .dashboard-card h3 {
+        font-size: 1rem;
+    }
+    
+    .chart-container {
+        padding: 0.75rem;
+    }
+    
+    .bar {
+        width: 28px;
+        min-width: 20px;
+    }
+    
+    .bar::after {
+        font-size: 0.7rem;
+        padding: 1px 4px;
+    }
+    
+    .percentage-circle {
+        width: 90px;
+        height: 90px;
+        min-width: 90px;
+        min-height: 90px;
+    }
+    
+    .percent-value {
+        font-size: 1.3rem;
+    }
+    
+    .total-number {
+        font-size: 1.8rem;
     }
     
     /* Housing Page Mobile Optimizations */

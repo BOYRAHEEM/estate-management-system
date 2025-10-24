@@ -14,8 +14,50 @@ class EstateManagementApp {
         this.isAuthenticated = false;
         this.activityLog = [];
         this.loginHistory = [];
+        this.isLoading = false;
+        this.dataCache = {
+            lastLoaded: null,
+            cacheTimeout: 5 * 60 * 1000 // 5 minutes cache
+        };
         
         this.init();
+    }
+
+    // Utility: Debounce function to improve search performance
+    debounce(func, wait = 300) {
+        let timeout;
+        return function executedFunction(...args) {
+            const later = () => {
+                clearTimeout(timeout);
+                func(...args);
+            };
+            clearTimeout(timeout);
+            timeout = setTimeout(later, wait);
+        };
+    }
+
+    // Loading state management
+    showLoadingState(elementId) {
+        const element = document.getElementById(elementId);
+        if (element) {
+            element.innerHTML = `
+                <div class="loading-skeleton">
+                    <div class="skeleton-line"></div>
+                    <div class="skeleton-line"></div>
+                    <div class="skeleton-line"></div>
+                </div>
+            `;
+        }
+    }
+
+    setLoadingState(isLoading) {
+        this.isLoading = isLoading;
+        const dashboardCards = document.querySelectorAll('.stat-card h3');
+        if (isLoading) {
+            dashboardCards.forEach(card => {
+                card.innerHTML = '<span class="loading-text">...</span>';
+            });
+        }
     }
 
     // Activity Logging Methods
@@ -358,8 +400,9 @@ class EstateManagementApp {
             categoryFilter.addEventListener('change', () => this.filterInventory());
         }
         
+        // Debounced search for better performance
         if (inventorySearch) {
-            inventorySearch.addEventListener('input', () => this.filterInventory());
+            inventorySearch.addEventListener('input', this.debounce(() => this.filterInventory(), 300));
         }
 
         // Housing filters
@@ -369,8 +412,9 @@ class EstateManagementApp {
         if (housingTypeFilter) {
             housingTypeFilter.addEventListener('change', () => this.filterHousing());
         }
+        // Debounced search for better performance
         if (housingSearch) {
-            housingSearch.addEventListener('input', () => this.filterHousing());
+            housingSearch.addEventListener('input', this.debounce(() => this.filterHousing(), 300));
         }
 
         // Modal controls
@@ -412,18 +456,18 @@ class EstateManagementApp {
 			});
         }
 
-        // Search and filters
-        document.getElementById('housing-search').addEventListener('input', (e) => {
+        // Search and filters - with debouncing for better performance
+        document.getElementById('housing-search').addEventListener('input', this.debounce((e) => {
             this.filterHousing(e.target.value);
-        });
+        }, 300));
 
         document.getElementById('housing-type-filter').addEventListener('change', (e) => {
             this.filterHousingByType(e.target.value);
         });
 
-        document.getElementById('inventory-search').addEventListener('input', (e) => {
+        document.getElementById('inventory-search').addEventListener('input', this.debounce((e) => {
             this.filterInventory(e.target.value);
-        });
+        }, 300));
 
         document.getElementById('room-filter').addEventListener('change', (e) => {
             this.filterInventoryByRoom(e.target.value);
@@ -431,15 +475,15 @@ class EstateManagementApp {
 
         const roomSearch = document.getElementById('room-search');
         if (roomSearch) {
-            roomSearch.addEventListener('input', (e) => {
+            roomSearch.addEventListener('input', this.debounce((e) => {
                 this.filterInventoryByRoomSearch(e.target.value);
-            });
+            }, 300));
         }
 
 
-        document.getElementById('employee-search').addEventListener('input', (e) => {
+        document.getElementById('employee-search').addEventListener('input', this.debounce((e) => {
             this.filterEmployees(e.target.value);
-        });
+        }, 300));
 
         // Dashboard controls
         // (Dashboard type filter removed)
@@ -710,36 +754,51 @@ class EstateManagementApp {
         }
     }
 
-    async loadInitialData() {
+    async loadInitialData(forceReload = false) {
         try {
+            // Check cache - avoid reloading if data is fresh
+            const now = Date.now();
+            if (!forceReload && this.dataCache.lastLoaded && 
+                (now - this.dataCache.lastLoaded) < this.dataCache.cacheTimeout &&
+                this.housingUnits.length > 0) {
+                console.log('Using cached data...');
+                return;
+            }
+
             console.log('Loading initial data...');
+            this.setLoadingState(true);
             
-            // Load data one by one to identify which fails
-            console.log('Fetching housing types...');
-            const housingTypes = await this.fetchData('/api/housing-types');
-            console.log('Housing types loaded:', housingTypes.length);
+            // Load all data in parallel for better performance
+            const [
+                housingTypes,
+                housingUnits,
+                rooms,
+                inventoryItems,
+                employees
+            ] = await Promise.all([
+                this.fetchData('/api/housing-types'),
+                this.fetchData('/api/housing-units'),
+                this.fetchData('/api/rooms'),
+                this.fetchData('/api/inventory'),
+                this.fetchData('/api/employees')
+            ]);
             
-            console.log('Fetching housing units...');
-            const housingUnits = await this.fetchData('/api/housing-units');
-            console.log('Housing units loaded:', housingUnits.length);
-            
-            console.log('Fetching rooms...');
-            const rooms = await this.fetchData('/api/rooms');
-            console.log('Rooms loaded:', rooms.length);
-            
-            console.log('Fetching inventory...');
-            const inventoryItems = await this.fetchData('/api/inventory');
-            console.log('Inventory items loaded:', inventoryItems.length);
-            
-            console.log('Fetching employees...');
-            const employees = await this.fetchData('/api/employees');
-            console.log('Employees loaded:', employees.length);
+            console.log('Core data loaded:', {
+                housingTypes: housingTypes.length,
+                housingUnits: housingUnits.length,
+                rooms: rooms.length,
+                inventoryItems: inventoryItems.length,
+                employees: employees.length
+            });
 
             this.housingTypes = housingTypes;
             this.housingUnits = housingUnits;
             this.rooms = rooms;
             this.inventoryItems = inventoryItems;
             this.employees = employees;
+            
+            // Update cache timestamp
+            this.dataCache.lastLoaded = Date.now();
 
             // Load damage reports for all users (needed to check if items are already reported)
             console.log('Fetching damage reports...');
@@ -759,10 +818,12 @@ class EstateManagementApp {
 
             this.populateHousingTypeFilter();
             this.populateRoomFilter();
+            this.setLoadingState(false);
             console.log('Initial data loaded successfully');
         } catch (error) {
             console.error('Error loading initial data:', error);
             console.error('Error details:', error.message, error.stack);
+            this.setLoadingState(false);
             this.showNotification(`Error loading data: ${error.message}`, 'error');
         }
     }
@@ -909,7 +970,13 @@ class EstateManagementApp {
 
     async updateDashboard() {
         try {
-            const stats = await this.fetchData('/api/dashboard/stats');
+            // Calculate stats from already loaded data - no need for separate API call
+            const stats = {
+                totalHousing: this.housingUnits ? this.housingUnits.length : 0,
+                totalRooms: this.rooms ? this.rooms.length : 0,
+                totalItems: this.inventoryItems ? this.inventoryItems.length : 0,
+                totalEmployees: this.employees ? this.employees.filter(e => e.status === 'active').length : 0
+            };
             
             document.getElementById('total-housing').textContent = stats.totalHousing;
             document.getElementById('total-rooms').textContent = stats.totalRooms;
@@ -1640,7 +1707,7 @@ class EstateManagementApp {
             }
             
             this.closeModal();
-            await this.loadInitialData();
+            await this.loadInitialData(true); // Force reload after data modification
             this.renderHousingUnits();
             this.updateDashboard();
         } catch (error) {
@@ -1674,7 +1741,7 @@ class EstateManagementApp {
                 this.showNotification('Inventory item added successfully', 'success');
             }
             
-            await this.loadInitialData();
+            await this.loadInitialData(true); // Force reload after data modification
             this.renderInventoryItems();
             this.updateDashboard();
 
@@ -1731,7 +1798,7 @@ class EstateManagementApp {
             }
             
             this.closeModal();
-            await this.loadInitialData();
+            await this.loadInitialData(true); // Force reload after data modification
             this.renderEmployeeList();
             this.updateDashboard();
         } catch (error) {
@@ -1875,7 +1942,7 @@ class EstateManagementApp {
             try {
                 await this.deleteData(`/api/housing-units/${id}`);
                 this.showNotification('Housing unit deleted successfully', 'success');
-                await this.loadInitialData();
+                await this.loadInitialData(true); // Force reload after deletion
                 this.renderHousingUnits();
                 this.updateDashboard();
             } catch (error) {
@@ -1896,7 +1963,7 @@ class EstateManagementApp {
             try {
                 await this.deleteData(`/api/inventory/${id}`);
                 this.showNotification('Inventory item deleted successfully', 'success');
-                await this.loadInitialData();
+                await this.loadInitialData(true); // Force reload after deletion
                 this.renderInventoryItems();
                 this.updateDashboard();
             } catch (error) {
@@ -1911,7 +1978,7 @@ class EstateManagementApp {
             try {
                 await this.deleteData(`/api/employees/${id}`);
                 this.showNotification('Employee deleted successfully', 'success');
-                await this.loadInitialData();
+                await this.loadInitialData(true); // Force reload after deletion
                 this.renderEmployeeList();
                 this.updateDashboard();
             } catch (error) {
@@ -2047,7 +2114,7 @@ class EstateManagementApp {
                 this.showNotification('Room added successfully', 'success');
             }
 
-            await this.loadInitialData();
+            await this.loadInitialData(true); // Force reload after data modification
             this.manageRooms(housingUnitId);
             this.updateDashboard();
         } catch (error) {
@@ -2061,7 +2128,7 @@ class EstateManagementApp {
             try {
                 await this.deleteData(`/api/rooms/${roomId}`);
                 this.showNotification('Room deleted successfully', 'success');
-                await this.loadInitialData();
+                await this.loadInitialData(true); // Force reload after deletion
                 this.manageRooms(housingUnitId);
                 this.updateDashboard();
             } catch (error) {
@@ -2538,7 +2605,7 @@ class EstateManagementApp {
             this.closeModal();
             
             // Refresh inventory display
-            await this.loadInitialData();
+            await this.loadInitialData(true); // Force reload after data modification
             this.renderInventoryItems();
             this.updateDashboard();
             
@@ -2945,7 +3012,7 @@ class EstateManagementApp {
             await this.loadDamageReports();
             
             // Refresh inventory to show updated item conditions
-            await this.loadInitialData();
+            await this.loadInitialData(true); // Force reload after data modification
             this.renderInventoryItems();
             this.updateDashboard();
         } catch (error) {
